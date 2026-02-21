@@ -1,0 +1,196 @@
+-- TankStatsModule.lua
+-- Помести ModuleScript в ReplicatedStorage.TankStats
+
+local TankStats = {}
+
+-- Вспомогательные функции
+local function rpmToCooldown(rpm)
+	if type(rpm) ~= "number" or rpm <= 0 then return math.huge end
+	return 60 / rpm
+end
+
+local function calcEffectiveDamage(baseDamage, armor)
+	if type(armor) ~= "number" or armor <= 0 then return baseDamage end
+	return baseDamage * (100 / (100 + armor))
+end
+
+local function calcArmorPenetration(damage, armor)
+	if type(armor) ~= "number" or armor <= 0 then return true end
+	if type(damage) ~= "number" or damage <= 0 then return false end
+	local penetrationChance = math.min(damage / (armor * 2), 0.95)
+	return math.random() < penetrationChance
+end
+
+-- ==========================
+-- Пояснения структуры:
+-- TurretConfig.Main.Path = путь к основной башне (всегда существует)
+-- ExtraTurrets.{Enabled, List} = доп. башни (каждая: Name, Path, DefaultKey, InstantRotation, TurnSpeed)
+-- Projectile = { Primary = "ProjectileBig", Available = {"ProjectileBig","ProjectileSmall"}, Type = "Bullets"|"Shells" }
+-- Rage / Magic — как обсуждали ранее
+-- ==========================
+
+-- Пример: MS-1 General
+TankStats["MS-1 General"] = {
+	Armor = 40,
+	MaxHealth = 400,
+	FireRate = 20,
+	FireCooldown = rpmToCooldown(20),
+	DamagePerShell = 80,
+	HullTurnSpeed = 50,
+	MaxSpeed = 30,
+	Acceleration = 2.0,
+	Fuel = { MoveConsumption = 0.03, BoostConsumption = 0.075, Capacity = 110 },
+	AmmoCount = 20,
+	TurretCount = 1,
+
+	-- Турель
+	TurretConfig = {
+		Main = {
+			Path = "Body.Head.Barrel", -- обязательный путь: Body.Head (голова) и Barrel внутри неё
+			InstantRotation = true,
+			TurnSpeed = 120,
+		},
+	},
+
+	-- Доп. башни
+	ExtraTurrets = {
+		Enabled = false,
+		List = {}
+	},
+
+	-- Снаряды: primary + доступные + тип
+	Projectile = {
+		Primary = "ProjectileSmall",                      -- имя объекта в ReplicatedStorage.Projectiles
+		Available = { "ProjectileSmall", "ProjectileTiny" }, -- список доступных шаблонов
+		Type = "Bullets",                                  -- "Bullets" => рекомендовать raycast/bullet handling
+	},
+
+	-- Rage
+	Rage = {
+		Enabled = true,
+		FillOnReceive = true,
+		FillOnDeal = true,
+		FillPerDamage = 0.2,
+		Max = 100,
+		Duration = 8,
+		DrainPerSecond = nil,
+		ActivationKey = "R",
+	},
+
+	-- Magic
+	Magic = {
+		Enabled = false,
+		Max = 200,
+		RegenRate = 1.5,
+		Costs = { Portal = 120, Armor = 30, Shield = 60, Reflect = 80, Regen = 40, Revive = 200 },
+		ActivationKeys = { Portal = "Z", Armor = "X", Shield = "C", Reflect = "V", Regen = "B", Revive = "N" },
+	},
+
+	SelfRepair = true,
+	CanRepairOthers = true,
+	AntiOverturn = true,
+	RepairRatePartsPerSec = 0.5,
+}
+
+-- Тяжеловес: KV-44 Heavy (пример с доп. башнями и крупными снарядами)
+TankStats["KV-44 Heavy"] = {
+	Armor = 300,
+	MaxHealth = 2500,
+	FireRate = 6,
+	FireCooldown = rpmToCooldown(6),
+	DamagePerShell = 350,
+	HullTurnSpeed = 12,
+	MaxSpeed = 8,
+	Acceleration = 0.8,
+	Fuel = { MoveConsumption = 0.06, BoostConsumption = 0.2, Capacity = 300 },
+	AmmoCount = 10,
+	TurretCount = 2,
+
+	TurretConfig = {
+		Main = {
+			Path = "Turret.Main",
+			InstantRotation = false,
+			TurnSpeed = 18,
+		},
+	},
+
+	ExtraTurrets = {
+		Enabled = true,
+		List = {
+			{ Name = "Coax", Path = "Turret.Coax", DefaultKey = "F", InstantRotation = true, TurnSpeed = 90 },
+			{ Name = "Rear", Path = "Turret.Rear", DefaultKey = "G", InstantRotation = false, TurnSpeed = 45 },
+		},
+	},
+
+	Projectile = {
+		Primary = "ProjectileBig",
+		Available = { "ProjectileBig", "ProjectileArmorPiercing", "ProjectileHE" },
+		Type = "Shells", -- физические снаряды (часто с trail/explosion)
+	},
+
+	Rage = {
+		Enabled = true,
+		FillOnReceive = true,
+		FillOnDeal = true,
+		FillPerDamage = 0.15,
+		Max = 200,
+		Duration = 60,
+		ActivationKey = "T",
+	},
+
+	Magic = {
+		Enabled = false,
+		Max = 400,
+		RegenRate = 0.5,
+		Costs = { Portal = 300, Armor = 60, Shield = 120, Reflect = 160, Regen = 80, Revive = 400 },
+		ActivationKeys = { Portal = "Z", Armor = "X", Shield = "C", Reflect = "V", Regen = "B", Revive = "N" },
+	},
+
+	SelfRepair = false,
+	CanRepairOthers = false,
+	AntiOverturn = false,
+	RepairRatePartsPerSec = 0,
+}
+
+-- VOSTOK (пример большого монстра)
+TankStats["VOSTOK"] = {
+	Armor = 800000,
+	MaxHealth = 500000,
+	FireRate = 20,
+	FireCooldown = rpmToCooldown(20),
+	DamagePerShell = 80,
+	HullTurnSpeed = 20,
+	MaxSpeed = 10,
+	Acceleration = 2.0,
+	Fuel = { MoveConsumption = 0.03, BoostConsumption = 0.075, Capacity = 110 },
+	AmmoCount = 20,
+	TurretCount = 1,
+
+	TurretConfig = {
+		Main = { Path = "Turret.Main", InstantRotation = false, TurnSpeed = 8 }
+	},
+
+	ExtraTurrets = { Enabled = false, List = {} },
+
+	Projectile = {
+		Primary = "ProjectileBig",
+		Available = { "ProjectileBig" },
+		Type = "Shells",
+	},
+
+	Rage = { Enabled = true, FillOnReceive = true, FillOnDeal = true, FillPerDamage = 0.01, Max = 1000, Duration = 20, ActivationKey = "R" },
+	Magic = { Enabled = false },
+	SelfRepair = true,
+	CanRepairOthers = true,
+	RepairRatePartsPerSec = 0.5,
+}
+
+-- Экспорт
+return {
+	Tanks = TankStats,
+	_helpers = {
+		RPMToCooldown = rpmToCooldown,
+		CalcEffectiveDamage = calcEffectiveDamage,
+		CalcArmorPenetration = calcArmorPenetration,
+	}
+}

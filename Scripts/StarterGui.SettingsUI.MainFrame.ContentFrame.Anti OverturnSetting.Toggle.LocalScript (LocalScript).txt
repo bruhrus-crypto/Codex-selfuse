@@ -1,0 +1,50 @@
+-- LocalScript: Toggle AutoOverturn
+local RS = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+local toggleButton = script.Parent -- ожидаем, что этот скрипт внутри Toggle (TextButton/ImageButton)
+local setEvent = RS:WaitForChild("SetAutoOverturn", 5)
+
+-- helper colors
+local ON_COLOR = Color3.fromRGB(100,200,100)
+local OFF_COLOR = Color3.fromRGB(200,100,100)
+
+-- initial state from player attribute (or OFF)
+local function getInitial()
+	local a = player:GetAttribute("AutoOverturn")
+	if type(a) == "boolean" then return a end
+	return false
+end
+
+local state = getInitial()
+local function applyVisual()
+	if toggleButton:IsA("GuiObject") then
+		toggleButton.BackgroundColor3 = state and ON_COLOR or OFF_COLOR
+		-- if there's a child label, update text
+		local lbl = toggleButton:FindFirstChildWhichIsA("TextLabel") or toggleButton:FindFirstChildWhichIsA("TextButton")
+		if lbl then
+			lbl.Text = state and "Auto Overturn: ON" or "Auto Overturn: OFF"
+		end
+	end
+end
+
+applyVisual()
+
+-- click handler
+toggleButton.Activated:Connect(function()
+	state = not state
+	-- store attribute locally (so server/spawn read it later)
+	pcall(function() player:SetAttribute("AutoOverturn", state) end)
+	-- inform server
+	if setEvent then
+		pcall(function() setEvent:FireServer(state) end)
+	end
+	applyVisual()
+end)
+
+-- react to external changes (if server or other UI toggles it)
+player:GetAttributeChangedSignal("AutoOverturn"):Connect(function()
+	state = player:GetAttribute("AutoOverturn") == true
+	applyVisual()
+end)

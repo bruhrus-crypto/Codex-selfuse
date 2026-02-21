@@ -1,0 +1,413 @@
+-- TankTurrets_and_Fire.lua
+-- Server: turret aiming, extra-turret auto-target, firing using Projectiles from ReplicatedStorage
+-- Requires: ReplicatedStorage.TankStats module; expects projectiles in ReplicatedStorage.Projectiles
+-- Expects global _G.activeTanks and _G.tankHealthData (compat with your controller)
+
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local Debris = game:GetService("Debris")
+
+local TankStatsModule = require(RS:WaitForChild("TankStats"))
+local TankStats = TankStatsModule.Tanks
+local helpers = TankStatsModule._helpers or {}
+
+local ProjectilesFolder = RS:FindFirstChild("Projectiles")
+
+-- Config
+local TICK_DT = 1/30 -- how often turret logic updates (approx); we'll run on Heartbeat but use dt
+local AUTO_TARGET_RANGE = 300 -- max range for turrets to auto-target
+local EXTRA_TURRET_FIRE_RANGE = 220 -- range for auto-fire (shells/hitscan)
+local DEFAULT_TURN_SPEED = 120 -- deg/sec fallback
+
+-- Utilities
+local function splitDotPath(path)
+	if not path or path == "" then return {} end
+	local out = {}
+	for chunk in string.gmatch(path, "[^%.]+") do table.insert(out, chunk) end
+	return out
+end
+
+local function getDescendantByPath(root, path)
+	if not root or not path or path == "" then return nil end
+	local parts = splitDotPath(path)
+	local cur = root
+	for _, p in ipairs(parts) do
+		if not cur then return nil end
+		cur = cur:FindFirstChild(p)
+	end
+	return cur
+end
+
+-- find Motor6D connecting partA <-> partB (either order)
+local function findMotorBetween(partA, partB, rootModel)
+	if not partA or not partB then return nil end
+	rootModel = rootModel or partA:FindFirstAncestorWhichIsA("Model")
+	if rootModel then
+		for _, v in ipairs(rootModel:GetDescendants()) do
+			if v:IsA("Motor6D") then
+				if (v.Part0 == partA and v.Part1 == partB) or (v.Part1 == partA and v.Part0 == partB) then
+					return v
+				end
+			end
+		end
+	end
+	-- fallback: search global descendants
+	for _, v in ipairs(workspace:GetDescendants()) do
+		if v:IsA("Motor6D") and ((v.Part0 == partA and v.Part1 == partB) or (v.Part1 == partA and v.Part0 == partB)) then
+			return v
+		end
+	end
+	return nil
+end
+
+local function shortestAngleDelta(a, b)
+	-- return delta to go from a to b in range (-pi, pi]
+	local diff = (b - a + math.pi) % (2*math.pi) - math.pi
+	return diff
+end
+
+-- read Euler Y from CFrame rotation (using ToEulerAnglesYXZ)
+local function cframeYaw(cf)
+	-- ToEulerAnglesYXZ returns y,x,z usually; robust alternative: use LookVector to compute yaw
+	local lv = cf.LookVector
+	local yaw = math.atan2(lv.X, lv.Z)
+	return yaw
+end
+
+-- get current yaw expressed in local motor frame from motor.C0 (assumes yaw around Y)
+local function motorGetYaw(motor)
+	if not motor then return 0 end
+	local r = motor.C0 - motor.C0.Position -- rotation-only
+	local yaw = cframeYaw(r)
+	return yaw
+end
+
+-- set motor C0 yaw while preserving translation and X/Z rotations if present
+local function motorSetYaw(motor, yaw)
+	if not motor then return end
+	local pos = motor.C0.Position
+	-- preserve original X/Z small rotations by extracting lookvector's pitch? keep it simple:
+	motor.C0 = CFrame.new(pos) * CFrame.Angles(0, yaw, 0)
+end
+
+-- attempt to point a part (turret base) toward targetPos
+-- supports Motor6D if available (rotates Motor6D.C0), otherwise tries BodyGyro/BodyAngularVelocity on turret part
+local function rotatePartToward(part, targetPos, turnSpeedDeg, dt, instant)
+	if not part or not part.Parent then return end
+	turnSpeedDeg = turnSpeedDeg or DEFAULT_TURN_SPEED
+	local parent = part.Parent
+	local rootModel = part:FindFirstAncestorWhichIsA("Model")
+	-- prefer Motor6D between parent and part
+	local motor = findMotorBetween(parent, part, rootModel) or findMotorBetween(part, parent, rootModel)
+	-- compute desired yaw in local space of parent
+	local parentCFrame = parent.CFrame
+	local localTarget = parentCFrame:PointToObjectSpace(targetPos)
+	-- desired heading (around Y): angle between forward (0,0,-1) and vector to localTarget
+	local desiredYaw = math.atan2(localTarget.X, -localTarget.Z) -- note: forward -Z in Roblox
+	-- get current yaw
+	if motor then
+		local curYaw = motorGetYaw(motor)
+		if instant then
+			motorSetYaw(motor, desiredYaw)
+		else
+			local maxRad = math.rad(turnSpeedDeg) * dt
+			local delta = shortestAngleDelta(curYaw, desiredYaw)
+			local move = math.clamp(delta, -maxRad, maxRad)
+			motorSetYaw(motor, curYaw + move)
+		end
+		return true
+	else
+		-- no motor: try BodyGyro/BodyAngularVelocity on the part (align world up)
+		-- we'll create a temporary AlignOrientation if needed
+		-- fallback: directly rotate part CFrame around its pivot (may move whole model if Motor6D present)
+		if instant then
+			local lookC = CFrame.new(part.Position, targetPos)
+			part.CFrame = CFrame.new(part.CFrame.Position) * CFrame.Angles(0, math.atan2(lookC.LookVector.X, lookC.LookVector.Z), 0)
+		else
+			local curYaw = cframeYaw(part.CFrame)
+			local delta = shortestAngleDelta(curYaw, desiredYaw)
+			local maxRad = math.rad(turnSpeedDeg) * dt
+			local move = math.clamp(delta, -maxRad, maxRad)
+			part.CFrame = part.CFrame * CFrame.Angles(0, move, 0)
+		end
+		return true
+	end
+end
+
+-- pitch barrel (mini-turn) to aim elevation: rotate Barrel part locally (pitch around X)
+local function pitchBarrel(barrelPart, targetPos, turnSpeedDeg, dt, instant)
+	if not barrelPart or not barrelPart.Parent then return end
+	local rootModel = barrelPart:FindFirstAncestorWhichIsA("Model")
+	local parent = barrelPart.Parent
+	-- find Motor6D between parent (head) and barrel
+	local motor = findMotorBetween(parent, barrelPart, rootModel) or findMotorBetween(barrelPart, parent, rootModel)
+	-- compute desired pitch by expressing target in barrel's parent space
+	local parentCf = parent.CFrame
+	local localTarget = parentCf:PointToObjectSpace(targetPos)
+	-- localTarget relative forward axis is -Z; pitch = atan2(localTarget.Y, -localTarget.Z)
+	local desiredPitch = math.atan2(localTarget.Y, -localTarget.Z)
+	if motor then
+		-- motor.C0 stores initial offset; we'll set rotation around X (pitch)
+		local pos = motor.C0.Position
+		-- extract current pitch by decoding motor.C0 rotation -> use ToEulerAnglesXYZ
+		local _, curPitch, _ = motor.C0:ToEulerAnglesXYZ()
+		if instant then
+			motor.C0 = CFrame.new(pos) * CFrame.Angles(desiredPitch, 0, 0)
+		else
+			local maxRad = math.rad(turnSpeedDeg) * dt
+			local delta = shortestAngleDelta(curPitch, desiredPitch)
+			local move = math.clamp(delta, -maxRad, maxRad)
+			motor.C0 = CFrame.new(pos) * CFrame.Angles(curPitch + move, 0, 0)
+		end
+	else
+		-- fallback: rotate barrelPart around its local X
+		local cf = barrelPart.CFrame
+		local curPitch = math.atan2(cf.LookVector.Y, -cf.LookVector.Z)
+		if instant then
+			barrelPart.CFrame = CFrame.new(barrelPart.CFrame.Position) * CFrame.Angles(desiredPitch, 0, 0)
+		else
+			local maxRad = math.rad(turnSpeedDeg) * dt
+			local delta = shortestAngleDelta(curPitch, desiredPitch)
+			local move = math.clamp(delta, -maxRad, maxRad)
+			barrelPart.CFrame = barrelPart.CFrame * CFrame.Angles(move, 0, 0)
+		end
+	end
+end
+
+-- find nearest enemy tank model for given source tank (scans _G.tankHealthData keys)
+local function findNearestEnemyTank(sourceTank, maxRange)
+	maxRange = maxRange or AUTO_TARGET_RANGE
+	local best, bestDist = nil, math.huge
+	for otherTank, _ in pairs(_G.tankHealthData or {}) do
+		if otherTank ~= sourceTank and otherTank.PrimaryPart and sourceTank.PrimaryPart then
+			-- basic team/friendly checks could go here (not implemented)
+			local d = (otherTank.PrimaryPart.Position - sourceTank.PrimaryPart.Position).Magnitude
+			if d <= maxRange and d < bestDist then
+				best = otherTank
+				bestDist = d
+			end
+		end
+	end
+	return best, bestDist
+end
+
+-- create projectile wrapper: prefer global function if available
+local function fireProjectile(ownerPlayer, originPos, direction, projName, opts)
+	local ok, res
+	if _G and type(_G.CreateTankProjectile) == "function" then
+		ok, res = pcall(_G.CreateTankProjectile, ownerPlayer, originPos, direction, projName, opts)
+		if ok then return res end
+		-- else fallback below
+	end
+
+	-- fallback simple projectile (non-perfect)
+	if not ProjectilesFolder then warn("No Projectiles folder for fallback projectile") return nil end
+	local tpl = ProjectilesFolder:FindFirstChild(projName)
+	if not tpl then warn("Projectile template not found:", projName) return nil end
+	local proj = tpl:Clone()
+	proj.Parent = Workspace
+	proj.CFrame = CFrame.new(originPos, originPos + direction)
+	proj:SetAttribute("OwnerUserId", ownerPlayer and ownerPlayer.UserId or nil)
+	local speed = (opts and opts.Speed) or proj:GetAttribute("Speed") or 180
+	pcall(function() proj.AssemblyLinearVelocity = direction.Unit * speed end)
+	Debris:AddItem(proj, (opts and opts.LifeTime) or proj:GetAttribute("LifeTime") or 8)
+	-- simple touched connection to apply damage
+	local conn
+	conn = proj.Touched:Connect(function(hit)
+		if not proj.Parent then if conn then conn:Disconnect() end return end
+		if not hit or not hit:IsA("BasePart") then return end
+		local tankModel = hit:FindFirstAncestorWhichIsA("Model")
+		if tankModel and _G.tankHealthData and _G.tankHealthData[tankModel] then
+			-- apply damage to hit part via global helper if available
+			local damage = (opts and opts.Damage) or proj:GetAttribute("Damage") or 50
+			-- try global dealDamageToPart if present
+			if _G and type(_G.DealDamageToPart) == "function" then
+				pcall(_G.DealDamageToPart, hit, ownerPlayer, damage)
+			else
+				-- fallback: use simple attribute subtract on model if present
+				local H = _G.tankHealthData and _G.tankHealthData[tankModel]
+				if H and H.partHealth and H.partHealth[hit] then
+					-- reduce part health directly
+					local pd = H.partHealth[hit]
+					local eff = damage
+					if helpers and helpers.CalcEffectiveDamage then eff = helpers.CalcEffectiveDamage(damage, pd.armor or 0) end
+					pd.currentHealth = math.max(0, (pd.currentHealth or 0) - eff)
+					pcall(function() hit:SetAttribute("CurrentHealth", pd.currentHealth) end)
+				end
+			end
+		end
+		if conn then conn:Disconnect() end
+		pcall(function() proj:Destroy() end)
+	end)
+	return proj
+end
+
+-- turret fire (per turretName for a tank)
+local function turretFire(player, data, turretIdentifier, projectileOverride)
+	if not player or not data or not data.tank then return end
+	local stats = data.stats
+	if not stats then return end
+
+	local now = tick()
+	data._turretState = data._turretState or {}
+	data._turretState[turretIdentifier] = data._turretState[turretIdentifier] or { lastFire = 0 }
+
+	local st = data._turretState[turretIdentifier]
+	local cooldown = (stats.FireCooldown or 0.5)
+	if now - st.lastFire < cooldown then return end
+
+	-- choose projectile name
+	local projName = projectileOverride
+	if not projName then
+		if stats.Projectile and stats.Projectile.Primary then projName = stats.Projectile.Primary end
+		if not projName then projName = "ProjectileBig" end
+	end
+	-- validate allowed
+	if stats.Projectile and stats.Projectile.Available then
+		local ok = false
+		for _, v in ipairs(stats.Projectile.Available) do
+			if v == projName then ok = true break end
+		end
+		if not ok then projName = stats.Projectile.Primary or stats.Projectile.Available[1] end
+	end
+
+	-- get origin: try turret barrel if present
+	local turretPath = (turretIdentifier == "MAIN" and (stats.TurretConfig and stats.TurretConfig.Main and stats.TurretConfig.Main.Path) or turretIdentifier)
+	local turretPart = getDescendantByPath(data.tank, turretPath)
+	-- if turretPart points to Barrel directly, use its "muzzle" or forward offset
+	local barrel = nil
+	if turretPart then
+		if turretPart.Name == "Barrel" then barrel = turretPart
+		else
+			barrel = turretPart:FindFirstChild("Barrel") or turretPart:FindFirstChildWhichIsA("BasePart") -- fallback
+		end
+	end
+	local originCFrame = (barrel and barrel.CFrame) or (data.primary and data.primary.CFrame) or data.tank.PrimaryPart and data.tank.PrimaryPart.CFrame
+	if not originCFrame then return end
+	local origin = originCFrame.Position
+	local dir = (originCFrame.LookVector).Unit
+
+	-- Damage per shell
+	local damage = stats.DamagePerShell or 50
+	turretFire = turretFire -- noop to quiet linter
+
+	-- call projectile creator
+	fireProjectile(player, origin, dir, projName, { Damage = damage })
+
+	-- record last fire
+	st.lastFire = now
+end
+
+-- heartbeat loop: rotate main turret toward nearest enemy (if any), pitch barrel, rotate extra turrets -> nearest enemy and auto-fire
+local lastAcc = 0
+RunService.Heartbeat:Connect(function(dt)
+	lastAcc = lastAcc + dt
+	if lastAcc < TICK_DT then return end
+	local frameDt = lastAcc
+	lastAcc = 0
+
+	-- load tables from global
+	local activeTanks = _G.activeTanks or {}
+	local tankHealthData = _G.tankHealthData or {}
+
+	for player, data in pairs(activeTanks) do
+		if not data or not data.tank or not data.primary or not data.stats then
+			-- skip cleanup handled by controller
+		else
+			local stats = data.stats
+			-- MAIN TURRET: find turret base/head and barrel
+			local mainCfg = (stats.TurretConfig and stats.TurretConfig.Main) or nil
+			local mainPath = mainCfg and mainCfg.Path or "Body.Head.Barrel"
+			local mainNode = getDescendantByPath(data.tank, mainPath)
+			-- if path points to Barrel, find parent as head base
+			local headPart = nil
+			local barrelPart = nil
+			if mainNode then
+				if mainNode.Name == "Barrel" then
+					barrelPart = mainNode
+					headPart = mainNode.Parent
+				else
+					-- if specified path ends with Barrel we took it; else try to find Body.Head
+					-- prefer .Parent.Barrel if possible
+					barrelPart = mainNode:FindFirstChild("Barrel") or mainNode:FindFirstChildWhichIsA("BasePart")
+					headPart = mainNode
+				end
+			else
+				-- fallback to Body.Head / Body.Head.Barrel
+				headPart = getDescendantByPath(data.tank, "Body.Head")
+				barrelPart = headPart and headPart:FindFirstChild("Barrel")
+			end
+
+			-- choose target for main turret: nearest enemy within range (could later accept client aim)
+			local targetTank, dist = findNearestEnemyTank(data.tank, AUTO_TARGET_RANGE)
+			if targetTank and targetTank.PrimaryPart then
+				local targetPos = targetTank.PrimaryPart.Position
+				-- rotate head toward target
+				if headPart then
+					local turnSpeed = (mainCfg and (mainCfg.InstantRotation and math.huge or (mainCfg.TurnSpeed or DEFAULT_TURN_SPEED))) or DEFAULT_TURN_SPEED
+					local instant = (mainCfg and mainCfg.InstantRotation) == true
+					rotatePartToward(headPart, targetPos, turnSpeed, frameDt, instant)
+				end
+				-- pitch barrel to target if exists
+				if barrelPart then
+					-- use a smaller turn speed for pitch, use same turn speed param
+					local pitchSpeed = (mainCfg and mainCfg.TurnSpeed) or DEFAULT_TURN_SPEED
+					pitchBarrel(barrelPart, targetPos, pitchSpeed, frameDt, (mainCfg and mainCfg.InstantRotation) == true)
+				end
+			end
+
+			-- EXTRA TURRETS: auto-target nearest enemy and auto-fire if in range
+			local extra = stats.ExtraTurrets
+			if extra and extra.Enabled and extra.List and #extra.List > 0 then
+				for _, ent in ipairs(extra.List) do
+					local tPath = ent.Path
+					local tNode = getDescendantByPath(data.tank, tPath)
+					if tNode then
+						-- find its barrel child if present
+						local tBarrel = tNode:FindFirstChild("Barrel") or tNode:FindFirstChildWhichIsA("BasePart")
+						-- find nearest enemy relative to turret node
+						local nearest, nd = findNearestEnemyTank(data.tank, EXTRA_TURRET_FIRE_RANGE)
+						if nearest and nearest.PrimaryPart then
+							-- rotate turret toward nearest
+							local turnSpeed = (ent.InstantRotation and math.huge) or (ent.TurnSpeed or (mainCfg and mainCfg.TurnSpeed) or DEFAULT_TURN_SPEED)
+							local instant = ent.InstantRotation == true
+							rotatePartToward(tNode, nearest.PrimaryPart.Position, turnSpeed, frameDt, instant)
+							if tBarrel then pitchBarrel(tBarrel, nearest.PrimaryPart.Position, turnSpeed, frameDt, instant) end
+							-- auto-fire if within effective range and cooldown ok
+							if nd <= (EXTRA_TURRET_FIRE_RANGE or 200) then
+								-- ensure per-turret cooldown (use turret identifier = ent.Name)
+								data._turretState = data._turretState or {}
+								local id = ent.Name or tPath or "EXTRA"
+								data._turretState[id] = data._turretState[id] or { lastFire = 0 }
+								local st = data._turretState[id]
+								local now = tick()
+								local fireCooldown = stats.FireCooldown or 1
+								-- slow auto-fire slightly to avoid insane spamming
+								local autoCooldown = fireCooldown * (ent.AutoFireMultiplier or 1)
+								if now - st.lastFire >= autoCooldown then
+									-- fire using turretFire function; pass override projectile if ent.Projectile
+									local projName = (ent.Projectile and ent.Projectile.Primary) or (stats.Projectile and stats.Projectile.Primary)
+									turretFire(player, data, tPath, projName)
+									st.lastFire = now
+								end
+							end
+						end
+					end
+				end
+			end
+
+			-- optionally: main turret auto-fire (if desired): auto fire when target exists and in range
+			-- NOTE: keep it off by default to match expectation that player fires main gun manually
+			-- If you want main to auto-fire, uncomment below:
+			--[[
+			if targetTank and dist and dist <= 200 then
+				turretFire(player, data, "MAIN", nil)
+			end
+			]]
+		end
+	end
+end)
+
+print("Tank turret + projectile controller loaded")

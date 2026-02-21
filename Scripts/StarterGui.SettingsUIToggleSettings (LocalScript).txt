@@ -1,0 +1,268 @@
+-- Settings Toggle Button
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- Keep the same button positioning, sizing, and image
+local EYE_IMAGE = "rbxassetid://135821058124507"
+local BTN_POS_X = 173
+local BTN_POS_Y = 14
+local BTN_SIZE = 40
+local SPHERE_SCALE = 0.85
+local SPHERE_GAP = 6
+local sphereSize = math.floor(BTN_SIZE * SPHERE_SCALE)
+
+-- Create the screen gui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "SettingsToggleTopbar"
+screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true
+screenGui.Parent = playerGui
+
+-- Create the button with same properties
+local btn = Instance.new("ImageButton")
+btn.Name = "SettingsToggleButton"
+btn.Size = UDim2.new(0, BTN_SIZE, 0, BTN_SIZE)
+btn.Position = UDim2.new(0, BTN_POS_X, 0, BTN_POS_Y)
+btn.AnchorPoint = Vector2.new(0, 0)
+btn.BackgroundColor3 = Color3.new(0, 0, 0)
+btn.BackgroundTransparency = 0.15
+btn.BorderSizePixel = 0
+btn.Image = EYE_IMAGE
+btn.ScaleType = Enum.ScaleType.Fit
+btn.Parent = screenGui
+
+local corner = Instance.new("UICorner"); corner.CornerRadius = UDim.new(1,0); corner.Parent = btn
+local outline = Instance.new("UIStroke"); outline.Thickness = 1.6; outline.Color = Color3.fromRGB(0,0,0); outline.Transparency = 0.15; outline.Parent = btn
+
+-- Hover effects
+local sphere = Instance.new("Frame")
+sphere.Name = "HoverSphere"
+sphere.Size = UDim2.fromOffset(sphereSize, sphereSize)
+local spherePosX = BTN_POS_X + math.floor((BTN_SIZE - sphereSize) / 2)
+local spherePosY = math.floor((BTN_POS_Y - sphereSize - SPHERE_GAP) + 43)
+sphere.Position = UDim2.new(0, spherePosX, 0, spherePosY)
+sphere.AnchorPoint = Vector2.new(0, 0)
+sphere.BackgroundColor3 = Color3.new(1, 1, 1)
+sphere.BackgroundTransparency = 1
+sphere.BorderSizePixel = 0
+sphere.Visible = false
+sphere.Parent = screenGui
+local sphereCorner = Instance.new("UICorner"); sphereCorner.CornerRadius = UDim.new(1,0); sphereCorner.Parent = sphere
+
+local tooltip = Instance.new("TextLabel")
+tooltip.Name = "Tooltip"
+tooltip.Size = UDim2.fromOffset(160, 26)
+tooltip.Position = UDim2.new(0, BTN_POS_X - 80, 0, BTN_POS_Y + 35)
+tooltip.BackgroundTransparency = 1
+tooltip.TextColor3 = Color3.fromRGB(220,220,220)
+tooltip.Font = Enum.Font.SourceSans
+tooltip.TextSize = 14
+tooltip.Text = "Settings"
+tooltip.Visible = false
+tooltip.Parent = screenGui
+
+-- Settings UI variables
+local settingsGui = playerGui:WaitForChild("SettingsUI")
+local mainFrame = settingsGui:WaitForChild("MainFrame")
+local closeButton = mainFrame.TitleBar.CloseButton
+local overlay = settingsGui:WaitForChild("FocusOverlay")
+
+-- Create blur effect
+local blur = Instance.new("BlurEffect")
+blur.Name = "SettingsBlur"
+blur.Size = 0
+blur.Parent = Lighting
+
+local debounce = false
+local hoverVisible = false
+local settingsOpen = false
+
+-- Animation functions
+local function animateOpen()
+	-- Show UI elements
+	mainFrame.Visible = true
+	overlay.Visible = true
+	
+	-- Fade in overlay
+	local overlayTween = TweenService:Create(overlay, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {BackgroundTransparency = 0.7})
+	overlayTween:Play()
+	
+	-- Blur in
+	local blurTween = TweenService:Create(blur, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = 24})
+	blurTween:Play()
+	
+	-- Scale and fade in main frame
+	mainFrame.Size = UDim2.new(0, 0, 0, 0)
+	mainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+	mainFrame.BackgroundTransparency = 1
+	
+	local sizeTween = TweenService:Create(mainFrame, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+		Size = UDim2.new(0, 600, 0, 400),
+		Position = UDim2.new(0.5, -300, 0.5, -200),
+		BackgroundTransparency = 0
+	})
+	sizeTween:Play()
+end
+
+local function animateClose()
+	-- Scale and fade out main frame
+	local sizeTween = TweenService:Create(mainFrame, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
+		Size = UDim2.new(0, 0, 0, 0),
+		Position = UDim2.new(0.5, 0, 0.5, 0),
+		BackgroundTransparency = 1
+	})
+	
+	-- Fade out overlay
+	local overlayTween = TweenService:Create(overlay, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {BackgroundTransparency = 1})
+	
+	-- Blur out
+	local blurTween = TweenService:Create(blur, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Size = 0})
+	
+	sizeTween:Play()
+	overlayTween:Play()
+	blurTween:Play()
+	
+	sizeTween.Completed:Connect(function()
+		-- Hide UI elements
+		mainFrame.Visible = false
+		overlay.Visible = false
+	end)
+end
+
+-- Toggle settings function
+local function toggleSettings()
+	if debounce then return end
+	debounce = true
+	
+	if settingsOpen then
+		-- Close settings
+		animateClose()
+		settingsOpen = false
+	else
+		-- Open settings
+		animateOpen()
+		settingsOpen = true
+	end
+	
+	-- Button animation
+	TweenService:Create(btn, TweenInfo.new(0.1), {Size = UDim2.new(0,44,0,44)}):Play()
+	task.wait(0.1)
+	TweenService:Create(btn, TweenInfo.new(0.1), {Size = UDim2.new(0,40,0,40)}):Play()
+	
+	debounce = false
+end
+
+-- Hover effects
+local function showHover()
+	if hoverVisible then return end
+	hoverVisible = true
+	tooltip.Visible = true
+	TweenService:Create(btn, TweenInfo.new(0.12), {BackgroundTransparency = 0.25}):Play()
+	sphere.Visible = true
+	sphere.BackgroundTransparency = 1
+	local tw = TweenService:Create(sphere, TweenInfo.new(0.12), {BackgroundTransparency = 0.8})
+	tw:Play()
+end
+
+local function hideHover()
+	if not hoverVisible then return end
+	hoverVisible = false
+	tooltip.Visible = false
+	TweenService:Create(btn, TweenInfo.new(0.12), {BackgroundTransparency = 0.15}):Play()
+	local tw = TweenService:Create(sphere, TweenInfo.new(0.12), {BackgroundTransparency = 1})
+	tw:Play()
+	tw.Completed:Once(function()
+		if not hoverVisible then
+			sphere.Visible = false
+		end
+	end)
+end
+
+-- Setup slider interactions
+local function setupSliders()
+	for _, settingFrame in pairs(mainFrame.ContentFrame:GetChildren()) do
+		if settingFrame:IsA("Frame") and settingFrame:FindFirstChild("Slider") then
+			local slider = settingFrame.Slider
+			local sliderButton = slider.Button
+			local sliderFill = slider.Fill
+			local valueLabel = settingFrame.ValueLabel
+			
+			local isDragging = false
+			
+			local function updateSlider(input)
+				local relativeX = input.Position.X - slider.AbsolutePosition.X
+				local percentage = math.clamp(relativeX / slider.AbsoluteSize.X, 0, 1)
+				
+				sliderButton.Position = UDim2.new(percentage, -15, 0.5, -15)
+				sliderFill.Size = UDim2.new(percentage, 0, 1, 0)
+				valueLabel.Text = math.floor(percentage * 100)
+			end
+			
+			sliderButton.MouseButton1Down:Connect(function()
+				isDragging = true
+			end)
+			
+			UserInputService.InputChanged:Connect(function(input)
+				if isDragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+					updateSlider(input)
+				end
+			end)
+			
+			UserInputService.InputEnded:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1 then
+					isDragging = false
+				end
+			end)
+		end
+	end
+end
+
+-- Setup toggle interactions
+local function setupToggles()
+	for _, settingFrame in pairs(mainFrame.ContentFrame:GetChildren()) do
+		if settingFrame:IsA("Frame") and settingFrame:FindFirstChild("Toggle") then
+			local toggle = settingFrame.Toggle
+			local isOn = toggle.Text == "ON"
+			
+			toggle.MouseButton1Click:Connect(function()
+				isOn = not isOn
+				toggle.BackgroundColor3 = isOn and Color3.fromRGB(100, 200, 100) or Color3.fromRGB(200, 100, 100)
+				toggle.Text = isOn and "ON" or "OFF"
+			end)
+		end
+	end
+end
+
+-- Initialize
+mainFrame.Visible = false
+overlay.Visible = false
+
+-- Setup interactions
+setupSliders()
+setupToggles()
+
+-- Event connections
+btn.MouseEnter:Connect(showHover)
+btn.MouseLeave:Connect(hideHover)
+btn.MouseButton1Click:Connect(toggleSettings)
+btn.Activated:Connect(toggleSettings)
+
+closeButton.MouseButton1Click:Connect(function()
+	if settingsOpen then
+		animateClose()
+		settingsOpen = false
+	end
+end)
+
+-- Keyboard shortcut (Escape key)
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if input.KeyCode == Enum.KeyCode.Escape and not gameProcessed and settingsOpen then
+		animateClose()
+		settingsOpen = false
+	end
+end)

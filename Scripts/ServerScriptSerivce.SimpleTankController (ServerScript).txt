@@ -1,0 +1,496 @@
+-- Tank Controller — improved physics + overturn/roll-mode switching
+-- Place in ServerScriptService
+
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local Debris = game:GetService("Debris")
+
+local TankStatsModule = require(RS:WaitForChild("TankStats"))
+local TankStats = TankStatsModule.Tanks
+local helpers = TankStatsModule._helpers or {}
+
+local function getOrCreateEvent(name)
+	local e = RS:FindFirstChild(name)
+	if not e then
+		e = Instance.new("RemoteEvent")
+		e.Name = name
+		e.Parent = RS
+	end
+	return e
+end
+
+local TankSpawn = getOrCreateEvent("TankSpawn")
+local TankControl = getOrCreateEvent("TankControl")        -- expects (player, throttle, steer) normally
+local TankSpawned = getOrCreateEvent("TankSpawned")
+local TankDamage = getOrCreateEvent("TankDamage")
+local TankUIUpdate = getOrCreateEvent("TankUIUpdate")
+local TankFire = getOrCreateEvent("TankFire")
+local SetAutoOverturn = getOrCreateEvent("SetAutoOverturn") -- client -> server (player, enabled)
+
+-- Config
+local CONFIG = {
+	Speed = 15,
+	MaxForceFactor = 3500,
+	Acceleration = 5,
+	TrackRayDist = 1.2,
+	TrackRayOffset = 0.1,
+	ModeSwitchCooldown = 1.0,   -- seconds normal
+	ModeSwitchCooldownAuto = 2.0, -- seconds when auto overturn enabled
+	RollRateDeg = 90,           -- degrees/sec applied in roll-mode (A/D)
+	RollRateDegAutoMul = 0.5,   -- auto makes roll speed slower
+	UprightAllowMoveDot = 0.5,  -- world-up dot threshold to allow driving (prevents driving on side)
+	InvertedDotThreshold = -0.9,-- very upside-down
+	AntiOverturnAssistForce = 3000,
+	AntiOverturnAssistTorque = 8000,
+	MinGroundContact = 0.25
+}
+
+local activeTanks = {}   -- player -> data
+local tankHealthData = {} -- model -> health data
+
+-- Utils
+local function clampDensity(v) return math.clamp(tonumber(v) or 1, 0.0001, 100) end
+
+-- createPhysicsRootAndWelds (kept minimal, same idea you had)
+local function createPhysicsRootAndWelds(tank)
+	local root = Instance.new("Part")
+	root.Name = "__PhysicsRoot"
+	root.Size = Vector3.new(2,2,2)
+	root.Transparency = 1
+	root.CanCollide = false
+	root.Anchored = false
+	root.Massless = false
+	root.Parent = tank
+
+	local p = tank.PrimaryPart or tank:FindFirstChildWhichIsA("BasePart")
+	if p then root.CFrame = p.CFrame end
+
+	local leftTrack = tank:FindFirstChild("LeftTrack")
+	local rightTrack = tank:FindFirstChild("RightTrack")
+
+	for _, part in ipairs(tank:GetDescendants()) do
+		if part:IsA("BasePart") and part ~= root then
+			local keepIndependent = false
+			if leftTrack and part:IsDescendantOf(leftTrack) then keepIndependent = true end
+			if rightTrack and part:IsDescendantOf(rightTrack) then keepIndependent = true end
+
+			if not keepIndependent then
+				local weld = Instance.new("WeldConstraint")
+				weld.Part0 = root
+				weld.Part1 = part
+				weld.Parent = part
+			end
+
+			pcall(function()
+				local density = (part.CustomPhysicalProperties and part.CustomPhysicalProperties.Density) or 1
+				density = clampDensity(density)
+				part.CustomPhysicalProperties = PhysicalProperties.new(density, 0.8, 0, 100, 0)
+				part.Massless = false
+				part.Anchored = false
+				part.CanCollide = true
+			end)
+		end
+	end
+
+	return root
+end
+
+local function computeTankMass(tank)
+	local m = 0
+	for _, p in ipairs(tank:GetDescendants()) do
+		if p:IsA("BasePart") then
+			pcall(function() m = m + p:GetMass() end)
+		end
+	end
+	return math.max(1, m)
+end
+
+-- Raycast-based checks for tracks (exclude tank)
+local function checkTrackContacts(tank)
+	if not tank then return false, false end
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { tank }
+
+	local function checkSide(track)
+		if not track then return false end
+		local samples = {}
+		local wheels = track:FindFirstChild("Wheels") or track:FindFirstChild("Wheels2")
+		if wheels then
+			for _, w in ipairs(wheels:GetChildren()) do
+				if w:IsA("BasePart") then table.insert(samples, w) end
+			end
+		end
+		if #samples == 0 then
+			for _, c in ipairs(track:GetDescendants()) do
+				if c:IsA("BasePart") then table.insert(samples, c) end
+			end
+		end
+		local ns = math.min(6, #samples)
+		for i = 1, ns do
+			local part = samples[i]
+			local origin = part.Position + Vector3.new(0, CONFIG.TrackRayOffset, 0)
+			local dist = (part.Size.Y / 2) + CONFIG.TrackRayDist
+			local res = Workspace:Raycast(origin, Vector3.new(0, -dist, 0), params)
+			if res and res.Instance then return true end
+		end
+		return false
+	end
+
+	local left = checkSide(tank:FindFirstChild("LeftTrack"))
+	local right = checkSide(tank:FindFirstChild("RightTrack"))
+	return left, right
+end
+
+local function computeTrackIntegrity(tank, healthData)
+	local function calc(track)
+		if not track or not healthData then return 1 end
+		local total, cur = 0, 0
+		for _, p in ipairs(track:GetDescendants()) do
+			if p:IsA("BasePart") then
+				local pd = healthData.partHealth[p]
+				if pd then total = total + pd.maxHealth; cur = cur + pd.currentHealth end
+			end
+		end
+		if total <= 0 then return 1 end
+		return math.clamp(cur / total, 0, 1)
+	end
+	return calc(tank:FindFirstChild("LeftTrack")), calc(tank:FindFirstChild("RightTrack"))
+end
+
+-- helper: is strongly inverted (on head)
+local function isStronglyInverted(primary)
+	if not primary then return false end
+	local up = primary.CFrame.UpVector
+	return up.Y <= CONFIG.InvertedDotThreshold
+end
+
+-- helper: allow drive (require fairly upright, to prevent driving on side)
+local function canDriveByUpright(primary)
+	if not primary then return false end
+	local up = primary.CFrame.UpVector
+	return up.Y >= CONFIG.UprightAllowMoveDot
+end
+
+-- soft anti-overturn assist (only if player enabled auto)
+local function antiOverturnAssist(data, dt)
+	if not data or not data.primary then return end
+	local up = data.primary.CFrame.UpVector
+	local dot = up:Dot(Vector3.new(0,1,0))
+	if dot < CONFIG.UprightAllowMoveDot and data.vectorForce and data.bodyAng then
+		-- gently nudge upward & apply small roll toward upright
+		pcall(function()
+			data.vectorForce.Force = data.vectorForce.Force + Vector3.new(0, CONFIG.AntiOverturnAssistForce * dt, 0)
+			-- small torque around right vector to help roll
+			local right = data.primary.CFrame.RightVector
+			local small = right * (CONFIG.AntiOverturnAssistTorque * 0.0005 * dt)
+			local current = data.bodyAng and data.bodyAng.AngularVelocity or Vector3.new(0,0,0)
+			data.bodyAng.AngularVelocity = current + small
+		end)
+	end
+end
+
+-- minimal damage/etc omitted for brevity; we keep spawn, setup, movement, overturn system
+
+-- Setup damage detection simplified
+local function setupDamageDetection(tank, player)
+	for _, p in ipairs(tank:GetDescendants()) do
+		if p:IsA("BasePart") and p.Name ~= "__PhysicsRoot" then
+			p.Touched:Connect(function(hit)
+				if not hit then return end
+				local dmg = nil
+				if hit.GetAttribute then dmg = hit:GetAttribute("Damage") end
+				if dmg and tonumber(dmg) then
+					-- keep your existing dealDamageToPart if you have it, otherwise simple stub:
+					-- dealDamageToPart(p, player, tonumber(dmg))
+				end
+			end)
+		end
+	end
+end
+
+-- Tank spawn handler (keeps most of your existing flow)
+TankSpawn.OnServerEvent:Connect(function(player, tankName)
+	if type(tankName) ~= "string" then TankSpawned:FireClient(player, nil, "BadName"); return end
+	local template = RS:FindFirstChild("Tanks") and RS.Tanks:FindFirstChild(tankName)
+	if not template then TankSpawned:FireClient(player, nil, "ModelNotFound"); return end
+
+	-- remove old
+	if activeTanks[player] and activeTanks[player].tank then
+		pcall(function() activeTanks[player].tank:Destroy() end)
+		activeTanks[player] = nil
+	end
+
+	local oldChar = player.Character
+	if oldChar then
+		local h = oldChar:FindFirstChildOfClass("Humanoid")
+		if h then h.PlatformStand = true end
+	end
+
+	local tank = template:Clone()
+	tank.Name = player.Name .. "_Tank"
+	tank.Parent = Workspace
+
+	local primaryPart = tank:FindFirstChild("HumanoidRootPart") or tank.PrimaryPart or tank:FindFirstChildWhichIsA("BasePart")
+	if not primaryPart then TankSpawned:FireClient(player, nil, "NoPrimaryPart"); tank:Destroy(); return end
+	tank.PrimaryPart = primaryPart
+
+	-- position near player
+	pcall(function()
+		local pr = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+		if pr then tank:PivotTo(pr.CFrame) else tank:PivotTo(CFrame.new(0,10,0)) end
+	end)
+
+	if oldChar then pcall(function() oldChar:Destroy() end) end
+
+	local stats = TankStats[tankName]
+	if not stats then TankSpawned:FireClient(player, nil, "StatsNotFound"); tank:Destroy(); return end
+
+	-- init health (100 per part) - you probably already have more advanced
+	local partHealth = {}
+	local totalParts = 0
+	for _, p in ipairs(tank:GetDescendants()) do
+		if p:IsA("BasePart") and p.Name ~= "__PhysicsRoot" then
+			p:SetAttribute("MaxHealth", 100)
+			p:SetAttribute("CurrentHealth", 100)
+			p:SetAttribute("Armor", stats.Armor or 0)
+			partHealth[p] = { maxHealth = 100, currentHealth = 100, armor = stats.Armor or 0 }
+			totalParts = totalParts + 1
+			pcall(function() p.Anchored = false; p.Massless = false; p.CanCollide = true end)
+		end
+	end
+
+	local physicsRoot = createPhysicsRootAndWelds(tank)
+	physicsRoot.CanCollide = false
+	tank.PrimaryPart = physicsRoot
+
+	local mass = computeTankMass(tank)
+	local driveAtt = Instance.new("Attachment"); driveAtt.Name="__DriveAttachment"; driveAtt.Parent = physicsRoot; driveAtt.WorldPosition = physicsRoot.Position
+
+	local vectorForce = Instance.new("VectorForce")
+	vectorForce.Name = "__DriveForce"
+	vectorForce.Attachment0 = driveAtt
+	vectorForce.RelativeTo = Enum.ActuatorRelativeTo.World
+	vectorForce.Force = Vector3.new(0,0,0)
+	vectorForce.Parent = physicsRoot
+
+	local bodyAng = Instance.new("BodyAngularVelocity")
+	bodyAng.Name = "__TurnBAV"
+	bodyAng.MaxTorque = Vector3.new(0, math.huge, 0) -- default yaw
+	bodyAng.AngularVelocity = Vector3.new(0,0,0)
+	bodyAng.Parent = physicsRoot
+
+	local maxForceScalar = math.max(1, mass) * (CONFIG.MaxForceFactor or 3500)
+	activeTanks[player] = {
+		tank = tank,
+		primary = physicsRoot,
+		vectorForce = vectorForce,
+		bodyAng = bodyAng,
+		throttle = 0,
+		steer = 0,
+		currSpeed = 0,
+		stats = stats,
+		fuel = (stats.Fuel and stats.Fuel.Capacity) or 0,
+		lastFuelTime = tick(),
+		_cachedMass = mass,
+		_maxForceScalar = maxForceScalar,
+		-- modes
+		mode = "MOVE",
+		lastModeSwitch = 0,
+		autoOverturn = player:GetAttribute("AutoOverturn") == true
+	}
+
+	tankHealthData[tank] = {
+		partHealth = partHealth,
+		totalParts = totalParts,
+		maxHealth = stats.MaxHealth or (totalParts * 100),
+		currentHealth = stats.MaxHealth or (totalParts * 100),
+		currentArmor = stats.Armor or 0,
+		maxArmor = stats.Armor or 0
+	}
+
+	setupDamageDetection(tank, player)
+
+	TankUIUpdate:FireClient(player, { type="initial", health = tankHealthData[tank].currentHealth, maxHealth = tankHealthData[tank].maxHealth, fuel = activeTanks[player].fuel, maxFuel = (stats.Fuel and stats.Fuel.Capacity) or 0 })
+
+	TankSpawned:FireClient(player, tank, "OK")
+end)
+
+-- Handle AutoOverturn toggle from client
+SetAutoOverturn.OnServerEvent:Connect(function(player, enabled)
+	local data = activeTanks[player]
+	pcall(function() player:SetAttribute("AutoOverturn", enabled == true) end)
+	if data then data.autoOverturn = enabled == true end
+end)
+
+-- Read control input; we also accept the usual (throttle, steer)
+TankControl.OnServerEvent:Connect(function(player, throttle, steer)
+	local data = activeTanks[player]
+	if not data then return end
+	-- throttle/steer are numbers; keep them clamped
+	data.throttle = math.clamp(tonumber(throttle) or 0, -1, 1)
+	data.steer = math.clamp(tonumber(steer) or 0, -1, 1)
+end)
+
+-- Fire shells
+TankFire.OnServerEvent:Connect(function(player)
+	local data = activeTanks[player]
+	if not data or not data.tank then return end
+	if data.lastFire and (tick() - data.lastFire) < (data.stats.FireCooldown or 1) then return end
+	local turret = data.tank:FindFirstChild("Turret") or data.primary or data.tank.PrimaryPart
+	local barrel = (turret and (turret:FindFirstChild("Barrel") or turret)) or data.primary
+	local originCFrame = barrel.CFrame * CFrame.new(0,0,-2)
+	local dir = barrel.CFrame.LookVector
+	-- createProjectile(player, originCFrame.Position, dir, data.stats.DamagePerShell or 50)  -- implement as you have
+	data.lastFire = tick()
+end)
+
+-- Heartbeat: main physics loop + mode switching + movement
+RunService.Heartbeat:Connect(function(dt)
+	if dt <= 0 then return end
+	for player, data in pairs(activeTanks) do
+		if not data or not data.tank or not data.primary then
+			if data and data.tank then tankHealthData[data.tank] = nil end
+			activeTanks[player] = nil
+		else
+			-- fuel update (simple)
+			local now = tick()
+			if (now - (data.lastFuelTime or now)) >= 0.05 then
+				local diff = now - (data.lastFuelTime or now)
+				local fuelUse = 0
+				if math.abs(data.throttle or 0) > 0.05 then fuelUse = fuelUse + (data.stats.Fuel.MoveConsumption or 0.5) * math.abs(data.throttle) * diff end
+				local maxSpd = data.stats.MaxSpeed or CONFIG.Speed
+				if math.abs(data.currSpeed or 0) > (maxSpd * 0.8) then fuelUse = fuelUse + (data.stats.Fuel.BoostConsumption or 1.2) * diff end
+				data.fuel = math.max(0, (data.fuel or 0) - fuelUse)
+				data.lastFuelTime = now
+				TankUIUpdate:FireClient(player, { type="fuel", fuel = data.fuel, maxFuel = (data.stats.Fuel and data.stats.Fuel.Capacity) or 0 })
+				if data.fuel <= 0 then data.throttle = 0; data.currSpeed = 0 end
+			end
+
+			-- compute left/right track contact
+			local leftContact, rightContact = checkTrackContacts(data.tank)
+			local noTracksContact = (not leftContact) and (not rightContact)
+
+			-- determine upright/inverted state using primary up vector
+			local upDot = data.primary.CFrame.UpVector:Dot(Vector3.new(0,1,0))
+			local overturnedByUp = isStronglyInverted(data.primary) -- very upside-down
+			local isSide = math.abs(upDot) < 0.2 -- near side (prevent drive)
+
+			-- decide mode switching (cooldown aware)
+			local cooldown = data.autoOverturn and CONFIG.ModeSwitchCooldownAuto or CONFIG.ModeSwitchCooldown
+			if (overturnedByUp or noTracksContact) and data.mode ~= "OVERTURN" and (now - (data.lastModeSwitch or 0)) >= cooldown then
+				data.mode = "OVERTURN"
+				data.lastModeSwitch = now
+			elseif (not overturnedByUp) and not noTracksContact and data.mode ~= "MOVE" and (now - (data.lastModeSwitch or 0)) >= cooldown then
+				data.mode = "MOVE"
+				data.lastModeSwitch = now
+			end
+
+			-- if player enabled auto overturn assist, apply soft assist
+			if data.autoOverturn then
+				antiOverturnAssist(data, dt)
+			end
+
+			-- Movement behavior:
+			if data.mode == "OVERTURN" then
+				-- disable forward/back drive
+				if data.vectorForce then pcall(function() data.vectorForce.Force = Vector3.new(0,0,0) end) end
+
+				-- only allow roll if TankStats allows it
+				local allowRoll = data.stats and data.stats.AntiOverturn
+				if allowRoll then
+					-- compute roll speed (deg/sec) and convert to rad/sec
+					local baseDeg = CONFIG.RollRateDeg
+					local deg = baseDeg
+					if data.autoOverturn then deg = deg * CONFIG.RollRateDegAutoMul end
+					local rollRad = math.rad(deg) * (data.steer or 0) -- steer -1..1
+					-- convert local (0,0,rollRad) to world angular velocity
+					local worldRoll = data.primary.CFrame:VectorToWorldSpace(Vector3.new(0,0,rollRad))
+					if data.bodyAng then
+						pcall(function()
+							data.bodyAng.MaxTorque = Vector3.new(0,0,math.huge)
+							data.bodyAng.AngularVelocity = worldRoll
+						end)
+					else
+						-- fallback: nudge CFrame (less ideal)
+						pcall(function() data.primary.CFrame = data.primary.CFrame * CFrame.Angles(0, 0, rollRad * dt) end)
+					end
+				else
+					-- rolling not allowed for this tank type: just zero angular velocity
+					if data.bodyAng then pcall(function() data.bodyAng.AngularVelocity = Vector3.new(0,0,0) end) end
+				end
+
+			else -- MOVE mode
+				-- Prevent driving if tank is on side (must be mostly upright)
+				if not canDriveByUpright(data.primary) then
+					-- disallow drive
+					if data.vectorForce then pcall(function() data.vectorForce.Force = Vector3.new(0,0,0) end) end
+					data.currSpeed = 0
+				else
+					-- normal drive
+					local maxSpeed = (data.stats and data.stats.MaxSpeed) or CONFIG.Speed
+					local acc = (data.stats and data.stats.Acceleration) or CONFIG.Acceleration
+					local targetSpeed = (data.fuel and data.fuel > 0) and (data.throttle * maxSpeed) or 0
+					data.currSpeed = data.currSpeed + (targetSpeed - data.currSpeed) * (dt * acc)
+
+					-- compute desired force horizontally
+					local forwardVec = data.primary.CFrame.LookVector
+					local desiredVel = forwardVec * data.currSpeed
+					local currVel = Vector3.new(0,0,0)
+					pcall(function() currVel = data.primary.AssemblyLinearVelocity end)
+					local desiredAccel = (desiredVel - Vector3.new(currVel.X, 0, currVel.Z)) / math.max(dt, 1e-4)
+					local mass = data._cachedMass or computeTankMass(data.tank)
+					data._cachedMass = mass
+					local desiredForce = Vector3.new(desiredAccel.X, 0, desiredAccel.Z) * mass
+
+					-- integrity influence if you have track health
+					local avgInt = 1
+					local H = tankHealthData[data.tank]
+					if H then
+						local li, ri = computeTrackIntegrity(data.tank, H)
+						avgInt = (li + ri) / 2
+					end
+					desiredForce = desiredForce * avgInt
+
+					local maxF = data._maxForceScalar or (mass * CONFIG.MaxForceFactor)
+					if desiredForce.Magnitude > maxF then desiredForce = desiredForce.Unit * maxF end
+					if data.vectorForce then pcall(function() data.vectorForce.Force = desiredForce end) end
+
+					-- yaw turning normal (around Y)
+					local veerBias = 0
+					if H then local li, ri = computeTrackIntegrity(data.tank, H); veerBias = (ri - li) * (CONFIG.VeerMultiplier or 1.5) end
+					local steerInput = data.steer or 0
+					local hullTurnDeg = (data.stats and data.stats.HullTurnSpeed) or CONFIG.TurnSpeedDeg
+					local combined = steerInput + (veerBias * (data.throttle or 0))
+					local radPerSec = math.rad(hullTurnDeg or CONFIG.TurnSpeedDeg) * combined
+					if data.bodyAng then pcall(function() data.bodyAng.MaxTorque = Vector3.new(0, math.huge, 0); data.bodyAng.AngularVelocity = Vector3.new(0, radPerSec * avgInt, 0) end) end
+				end
+			end
+		end
+	end
+end)
+
+-- cleanup
+Players.PlayerRemoving:Connect(function(player)
+	local d = activeTanks[player]
+	if d then
+		if d.tank and d.tank.Parent then
+			tankHealthData[d.tank] = nil
+			d.tank:Destroy()
+		end
+		activeTanks[player] = nil
+	end
+end)
+
+Players.PlayerAdded:Connect(function(player)
+	player.CharacterAdded:Connect(function(character)
+		task.wait(0.4)
+		if activeTanks[player] and activeTanks[player].tank then
+			pcall(function() character:Destroy() end)
+		end
+	end)
+end)
+
+print("Tank Controller (with overturn/roll-mode) loaded")

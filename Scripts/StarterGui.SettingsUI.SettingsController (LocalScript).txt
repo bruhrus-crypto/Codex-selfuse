@@ -1,0 +1,207 @@
+-- Settings UI Controller
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- Wait for SettingsUI to be cloned to PlayerGui
+local settingsGui = playerGui:WaitForChild("SettingsUI")
+
+-- Get UI elements
+local mainFrame = settingsGui:WaitForChild("MainFrame")
+local closeButton = mainFrame.TitleBar.CloseButton
+local overlay = settingsGui:WaitForChild("FocusOverlay")
+
+-- Create blur effect
+local blur = Instance.new("BlurEffect")
+blur.Name = "SettingsBlur"
+blur.Size = 0
+blur.Parent = Lighting
+
+-- Store original transparency values
+local originalTransparency = {}
+
+-- Animation functions
+local function animateOpen()
+	-- Show UI elements
+	mainFrame.Visible = true
+	overlay.Visible = true
+	
+	-- Fade in overlay
+	local overlayTween = TweenService:Create(overlay, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {BackgroundTransparency = 0.7})
+	overlayTween:Play()
+	
+	-- Blur in
+	local blurTween = TweenService:Create(blur, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = 24})
+	blurTween:Play()
+	
+	-- Store original transparency and dim other GUIs
+	originalTransparency = {}
+	for _, gui in pairs(playerGui:GetChildren()) do
+		if gui ~= settingsGui and gui:IsA("ScreenGui") then
+			for _, child in pairs(gui:GetDescendants()) do
+				if child:IsA("GuiObject") then
+					originalTransparency[child] = {
+						ImageTransparency = child.ImageTransparency,
+						TextTransparency = child.TextTransparency,
+						BackgroundTransparency = child.BackgroundTransparency
+					}
+					
+					child.ImageTransparency = math.min(child.ImageTransparency + 0.3, 1)
+					child.TextTransparency = math.min(child.TextTransparency + 0.3, 1)
+					child.BackgroundTransparency = math.min(child.BackgroundTransparency + 0.3, 1)
+				end
+			end
+		end
+	end
+	
+	-- Scale and fade in main frame
+	mainFrame.Size = UDim2.new(0, 0, 0, 0)
+	mainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+	mainFrame.BackgroundTransparency = 1
+	
+	local sizeTween = TweenService:Create(mainFrame, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+		Size = UDim2.new(0, 600, 0, 400),
+		Position = UDim2.new(0.5, -300, 0.5, -200),
+		BackgroundTransparency = 0
+	})
+	sizeTween:Play()
+end
+
+local function animateClose()
+	-- Scale and fade out main frame
+	local sizeTween = TweenService:Create(mainFrame, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
+		Size = UDim2.new(0, 0, 0, 0),
+		Position = UDim2.new(0.5, 0, 0.5, 0),
+		BackgroundTransparency = 1
+	})
+	
+	-- Fade out overlay
+	local overlayTween = TweenService:Create(overlay, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {BackgroundTransparency = 1})
+	
+	-- Blur out
+	local blurTween = TweenService:Create(blur, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Size = 0})
+	
+	sizeTween:Play()
+	overlayTween:Play()
+	blurTween:Play()
+	
+	sizeTween.Completed:Connect(function()
+		-- Hide UI elements
+		mainFrame.Visible = false
+		overlay.Visible = false
+		
+		-- Restore original transparency
+		for child, values in pairs(originalTransparency) do
+			if child and child.Parent then
+				child.ImageTransparency = values.ImageTransparency
+				child.TextTransparency = values.TextTransparency
+				child.BackgroundTransparency = values.BackgroundTransparency
+			end
+		end
+		originalTransparency = {}
+	end)
+end
+
+-- Toggle settings function
+local function toggleSettings()
+	if mainFrame.Visible then
+		animateClose()
+	else
+		animateOpen()
+	end
+end
+
+-- Setup slider interactions
+local function setupSliders()
+	for _, settingFrame in pairs(mainFrame.ContentFrame:GetChildren()) do
+		if settingFrame:IsA("Frame") and settingFrame:FindFirstChild("Slider") then
+			local slider = settingFrame.Slider
+			local sliderButton = slider.Button
+			local sliderFill = slider.Fill
+			local valueLabel = settingFrame.ValueLabel
+			
+			local isDragging = false
+			
+			local function updateSlider(input)
+				local relativeX = input.Position.X - slider.AbsolutePosition.X
+				local percentage = math.clamp(relativeX / slider.AbsoluteSize.X, 0, 1)
+				
+				sliderButton.Position = UDim2.new(percentage, -15, 0.5, -15)
+				sliderFill.Size = UDim2.new(percentage, 0, 1, 0)
+				valueLabel.Text = math.floor(percentage * 100)
+			end
+			
+			sliderButton.MouseButton1Down:Connect(function()
+				isDragging = true
+			end)
+			
+			UserInputService.InputChanged:Connect(function(input)
+				if isDragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+					updateSlider(input)
+				end
+			end)
+			
+			UserInputService.InputEnded:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1 then
+					isDragging = false
+				end
+			end)
+		end
+	end
+end
+
+-- Setup toggle interactions
+local function setupToggles()
+	for _, settingFrame in pairs(mainFrame.ContentFrame:GetChildren()) do
+		if settingFrame:IsA("Frame") and settingFrame:FindFirstChild("Toggle") then
+			local toggle = settingFrame.Toggle
+			local isOn = toggle.Text == "ON"
+			
+			toggle.MouseButton1Click:Connect(function()
+				isOn = not isOn
+				toggle.BackgroundColor3 = isOn and Color3.fromRGB(100, 200, 100) or Color3.fromRGB(200, 100, 100)
+				toggle.Text = isOn and "ON" or "OFF"
+			end)
+		end
+	end
+end
+
+-- Initialize
+mainFrame.Visible = false
+overlay.Visible = false
+
+-- Setup interactions
+setupSliders()
+setupToggles()
+
+-- Event connections
+closeButton.MouseButton1Click:Connect(toggleSettings)
+
+-- Keyboard shortcut (Escape key)
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if input.KeyCode == Enum.KeyCode.Escape and not gameProcessed then
+		toggleSettings()
+	end
+end)
+
+-- Example: Add a button to open settings (you can remove this if you have your own trigger)
+local openButton = Instance.new("TextButton")
+openButton.Name = "OpenSettingsButton"
+openButton.Size = UDim2.new(0, 100, 0, 30)
+openButton.Position = UDim2.new(0, 10, 0, 10)
+openButton.BackgroundColor3 = Color3.fromRGB(100, 100, 255)
+openButton.BorderSizePixel = 0
+openButton.Text = "Settings"
+openButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+openButton.Font = Enum.Font.Gotham
+openButton.Parent = playerGui
+
+local buttonCorner = Instance.new("UICorner")
+buttonCorner.CornerRadius = UDim.new(0, 6)
+buttonCorner.Parent = openButton
+
+openButton.MouseButton1Click:Connect(toggleSettings)

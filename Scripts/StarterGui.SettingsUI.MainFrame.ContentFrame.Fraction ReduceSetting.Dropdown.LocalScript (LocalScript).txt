@@ -1,0 +1,72 @@
+-- Dropdown toggle script (LocalScript placed inside SettingsUI.MainFrame.Fraction ReduceSetting.Dropdown)
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+local dropdownButton = script.Parent  -- предполагаем, что это TextButton или Frame с Button
+local displayLabel = nil
+
+-- Попробуем найти text child для показа текущего режима
+if dropdownButton:IsA("TextButton") or dropdownButton:IsA("TextLabel") then
+	displayLabel = dropdownButton
+else
+	displayLabel = dropdownButton:FindFirstChildWhichIsA("TextLabel") or dropdownButton:FindFirstChild("Label")
+end
+
+-- Modes
+local MODE_NAMES = {
+	[1] = "Integers",
+	[2] = "Tenths",
+	[3] = "Hundredths",
+	[4] = "Auto",
+}
+
+-- read current (or default)
+local function getMode()
+	local v = player:GetAttribute("FuelFractionMode")
+	if type(v) ~= "number" then
+		return 4
+	end
+	return math.clamp(math.floor(v), 1, 4)
+end
+
+local function setMode(mode)
+	mode = math.clamp(math.floor(mode or 4), 1, 4)
+	player:SetAttribute("FuelFractionMode", mode)
+	-- update UI display
+	if displayLabel then
+		pcall(function() displayLabel.Text = MODE_NAMES[mode] end)
+	end
+end
+
+-- init
+setMode(getMode())
+
+-- Click handler: cycle to next mode
+local function onClicked()
+	local cur = getMode()
+	local nxt = cur + 1
+	if nxt > #MODE_NAMES then nxt = 1 end
+	setMode(nxt)
+	-- optionally: play sound or visual feedback
+end
+
+-- Connect click
+if dropdownButton:IsA("TextButton") or dropdownButton:IsA("ImageButton") then
+	dropdownButton.MouseButton1Click:Connect(onClicked)
+else
+	-- try to find a clickable child
+	local btn = dropdownButton:FindFirstChildWhichIsA("TextButton") or dropdownButton:FindFirstChildWhichIsA("ImageButton")
+	if btn then
+		btn.MouseButton1Click:Connect(onClicked)
+	else
+		-- fallback: make whole frame clickable by InputBegan
+		dropdownButton.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 then onClicked() end
+		end)
+	end
+end
+
+-- Also listen to attribute changes (in case other script changes it)
+player:GetAttributeChangedSignal("FuelFractionMode"):Connect(function()
+	setMode(getMode())
+end)

@@ -1,0 +1,21 @@
+-- TankTransformButton.lua
+-- LocalScript внутри TextButton. Name кнопки = имя модели в ReplicatedStorage.Tanks (например "MS-1")
+
+local RS = game:GetService("ReplicatedStorage")
+local EV_SPAWN = RS:WaitForChild("TankSpawn")
+
+local button = script.Parent
+assert(button and button:IsA("TextButton"), "Script must be parented to a TextButton")
+
+button.Activated:Connect(function()
+	local modelName = button.Name
+	if not modelName or modelName == "" then
+		warn("Button name empty — не удалось определить модель танка")
+		return
+	end
+	EV_SPAWN:FireServer(modelName)
+	-- опционально: временно заблокировать кнопку UI до ответа сервера
+	button.Text = "Спавн..."
+	wait(0.5)
+	button.Text = modelName
+end)
