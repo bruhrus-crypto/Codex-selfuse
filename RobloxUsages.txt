@@ -1,0 +1,631 @@
+Roblox Usages — practical reference for objects, services, replication, and pitfalls
+
+Purpose
+- This file centralizes Roblox engine object/service guidance that was previously spread across Knowledge notes.
+- Focus: where to store objects, where to run logic, replication behavior, performance traps, and safer alternatives.
+
+Core runtime model
+- Roblox Luau = Luau language + sandbox runtime + Roblox engine API.
+- Server authoritative for state: damage/economy/progression/persistence.
+- Client handles input, prediction, rendering, camera, VFX/SFX, and UI.
+- Remote payloads must be runtime-validated even when export type exists.
+
+==================================================
+SERVICES (what they do and where to use them)
+==================================================
+- RunService: game loop (Heartbeat/Stepped/RenderStepped).
+  - Heartbeat/Stepped: server+client simulation/timers.
+  - RenderStepped: client-only visuals/camera.
+- Workspace: active 3D world; map, dynamic models, physics objects.
+- Players: player lifecycle (PlayerAdded/PlayerRemoving), access to Player/Character.
+- ReplicatedStorage: shared resources visible to clients (remotes, shared modules, shared templates).
+- ServerStorage: server-only templates/secrets/heavy prefabs not visible to clients.
+- ServerScriptService: server-only scripts/module orchestrators.
+- StarterPack: tool templates copied to player Backpack.
+- StarterGui / StarterPlayerScripts / StarterCharacterScripts: per-player client template containers.
+- PlayerGui: runtime UI container for each player.
+- ReplicatedFirst: very-early client load assets (loading UI/bootstrap).
+- Lighting: world lighting/post effects (watch client performance).
+- SoundService: global audio settings.
+- DataStoreService: persistence (limits + retry/backoff required).
+- CollectionService: object tagging/grouping.
+- PhysicsService: collision groups matrix and filtering.
+- PathfindingService: path generation for NPCs (expensive at scale).
+- HttpService: HTTP features (permission and limits apply).
+- TeleportService / MarketplaceService / AnalyticsService: infrastructure services.
+
+Storage quick map
+- Put active physics/runtime objects in Workspace.
+- Put shared remotes/shared modules in ReplicatedStorage.
+- Put private server assets in ServerStorage/ServerScriptService.
+- Put runtime HUD in PlayerGui (not Workspace/ReplicatedStorage).
+
+==================================================
+PHYSICAL OBJECTS (BasePart family)
+==================================================
+BasePart key properties
+- Position/CFrame, AssemblyLinearVelocity/Velocity, Anchored, CanCollide, Massless,
+  CustomPhysicalProperties, Material, Transparency, CollisionGroup.
+
+Descendants and usage
+- Part: simple and cheap prototype geometry/collider.
+- WedgePart/CornerWedgePart: slopes/angled shapes.
+- MeshPart: custom geometry visuals (watch render/collision cost).
+- TrussPart: lattice-style structural part, useful for long frame sections.
+- UnionOperation: boolean-combined geometry; can have collision/perf caveats.
+- Terrain: large voxel world object; runtime edits are costly and should be batched.
+
+Do / avoid
+- Do spawn active physical objects into Workspace.
+- Avoid per-frame Create/Destroy storms; use pooling.
+- Use PhysicsService collision groups rather than brute-force CanCollide toggles everywhere.
+- Network ownership can smooth vehicle motion, but hit/authority checks remain server-side.
+
+==================================================
+MODELS, ASSEMBLIES, JOINTS, CONSTRAINTS
+==================================================
+Model and assemblies
+- Model is the standard gameplay container (tank, NPC, building).
+- Prefer a stable PrimaryPart for transforms/correction workflows.
+- Understand assembly behavior when constraints/welds are added.
+
+Joints/constraints
+- WeldConstraint: simple rigid linking.
+- Motor6D: animation skeleton joints (character rigs).
+- Hinge/BallSocket/Spring/Rod constraints: physical mechanisms.
+- AlignPosition/AlignOrientation: powerful but CPU-costly at scale.
+
+Pitfalls
+- Too many constraints can degrade simulation.
+- Use Motor6D for animation; use constraints for physical behavior.
+
+==================================================
+CHARACTERS AND ANIMATION
+==================================================
+- Humanoid: health, movement states, animator access.
+- HumanoidRootPart: reliable center point for distance/range checks.
+- Animator + Animation + AnimationTrack workflow:
+  - load once where possible, reuse tracks, set priorities correctly.
+  - guard playback calls with safety checks/pcall if needed.
+- Match animation assets to rig type (R6/R15 compatibility).
+
+==================================================
+INTERACTION OBJECTS
+==================================================
+- Tool (+ Handle): standard weapon/tool container, usually from StarterPack templates.
+- ClickDetector: direct click interaction.
+- ProximityPrompt: standardized in-world interact prompt with good UX.
+
+Rule
+- Client input events are never authoritative; server validates all gameplay consequences.
+
+==================================================
+NETWORKING OBJECTS
+==================================================
+RemoteEvent
+- Client -> server: FireServer(...), server handles OnServerEvent(player, ...).
+- Server -> clients: FireClient(player, ...) / FireAllClients(...).
+
+RemoteFunction
+- InvokeServer/InvokeClient are synchronous and blocking.
+- Use sparingly for short request/response only.
+- Avoid long workflows and especially risky server InvokeClient dependencies.
+
+BindableEvent/BindableFunction
+- Intra-environment communication only (server-server or client-client), not replicated.
+
+Protocol practices
+- Define payload contracts in shared types.
+- Runtime-validate every field (type/range/ownership/whitelist).
+- Prefer relevance routing (FireClient to interested players) over global broadcasts.
+
+==================================================
+GUI OBJECTS
+==================================================
+- ScreenGui in PlayerGui for screen-space HUD/UI.
+- Frame/TextLabel/TextButton/ImageLabel are core UI blocks.
+- BillboardGui for world-attached labels/health bars (add distance culling).
+- SurfaceGui for in-world screens (expensive in large counts).
+
+Placement rules
+- Do not keep final HUD under Workspace.
+- Do not rely on ReplicatedStorage as runtime GUI container.
+- Use StarterGui as template source; runtime per-player copies live in PlayerGui.
+
+Performance tips
+- Batch UI updates.
+- Avoid layout thrash and excessive per-frame property churn.
+
+==================================================
+VFX/SFX OBJECTS
+==================================================
+- ParticleEmitter: powerful but expensive at high rate/lifetime.
+- Beam: attachment-driven line/trail effect.
+- Trail: motion streak effect.
+- Decal/Texture: surface visuals/logos.
+- Sound: spatial audio via parented part/attachment; tune rolloff and max distance.
+
+Best practices
+- Pool VFX/SFX objects.
+- Use culling and relevance checks before playing heavy effects.
+- Authoritative gameplay event on server -> notify clients -> clients render visual-only effects.
+
+==================================================
+HIT DETECTION AND SPATIAL QUERIES
+==================================================
+- Use server-side Raycast for authoritative hit validation.
+- Configure RaycastParams/OverlapParams carefully (filters, collision groups, self-ignore).
+- Use overlap queries for AoE checks; avoid deprecated Region3-heavy patterns.
+
+==================================================
+PERSISTENCE
+==================================================
+- DataStoreService with UpdateAsync where atomic merges are needed.
+- Add retry with exponential backoff.
+- Cache state in memory + periodic autosave + save on PlayerRemoving.
+- Protect economy/inventory from race conditions (locks or optimistic merge strategy).
+
+==================================================
+COMMON TRAPS (and safer alternatives)
+==================================================
+- Trap: FireServer from server script.
+  - Do instead: FireClient/FireAllClients from server.
+- Trap: trust client position/hit/damage.
+  - Do instead: server raycast/range/cooldown/whitelist validation.
+- Trap: FireAllClients for every effect.
+  - Do instead: interest management + proximity filtering.
+- Trap: no connection cleanup.
+  - Do instead: track connections and Disconnect in Shutdown/PlayerRemoving/CharacterRemoving.
+- Trap: long-lived tables keyed by Instance without cleanup.
+  - Do instead: key by userId or add strict lifecycle cleanup hooks.
+- Trap: heavy Create/Destroy loops.
+  - Do instead: pooling.
+- Trap: blocking RemoteFunction workflows.
+  - Do instead: async RemoteEvent protocol.
+
+==================================================
+PLACEMENT CHEAT SHEET
+==================================================
+- Workspace: active world objects, spawn locations, moving models.
+- ReplicatedStorage: shared modules/remotes/prefab templates visible to clients.
+- ServerStorage: server-only prefab templates and protected content.
+- ServerScriptService: server business logic.
+- StarterPack: default player tools.
+- StarterGui: GUI templates.
+- StarterPlayerScripts/StarterCharacterScripts: client script templates.
+- PlayerGui: runtime per-player GUI.
+
+Do-not-place reminders
+- No secrets in ReplicatedStorage.
+- No LocalScript expected to run directly from ReplicatedStorage.
+- No ScreenGui expected to render from Workspace.
+- No client-access remotes hidden in ServerStorage.
+
+==================================================
+REVIEW CHECKLIST (objects/services focused)
+==================================================
+- Correct service/container placement?
+- Server authoritative path preserved?
+- Remote payload contracts + runtime validation present?
+- FireClient/proximity routing used when possible?
+- All connections cleaned up on lifecycle events?
+- Long-lived tables keyed safely (userId preferred)?
+- Pooling used for repeated VFX/projectile objects?
+- DataStore operations use UpdateAsync/backoff and save strategy?
+- RenderStepped used only for client visuals/camera?
+- Physics/collision groups profiled and tuned?
+
+==================================================
+APPENDIX: LESSONS FROM LARGE TANK SERVER SCRIPTS
+==================================================
+Operational patterns observed
+- Global bridge pattern (_G.activeTanks/_G.tankHealthData/_G.TankMainFire) can simplify cross-script
+  interoperability, but should be documented and versioned to avoid brittle coupling.
+- Workspace StringValue logs are practical for in-world diagnostics and QA playback of critical events.
+- Path-based resolver strategy (e.g., Body.Head.Barrel) with fallbacks is useful for heterogeneous rigs.
+- Turret aiming should prefer Motor6D transforms with fallback CFrame control for resilience.
+
+Performance and safety notes
+- Repeated descendant scans for Motor6D lookup are expensive in hot loops; cache motor bindings.
+- Touched-based projectile hits are acceptable fallback; authoritative raycast pipelines are usually
+  more deterministic under heavy concurrency.
+- Keep one time base per subsystem for cooldown logic; avoid mixed time references without sync strategy.
+- pcall guards are helpful for robustness, but excessive silent failures should be paired with
+  structured diagnostics to avoid masking systemic bugs.
+
+Code hygiene recommendations
+- Avoid shadowing key service locals (e.g., duplicate local RS declarations).
+- Keep debug channels level-based (INFO/WARN/ERROR + runtime toggle) for high-player-count matches.
+- Consolidate faction/targeting logic into shared helper modules with clear contracts.
+
+==================================================
+PRODUCTION APPENDIX: OBSERVABILITY, SCALE, NETWORK BUDGETS
+==================================================
+Observability do/don't
+- Do not use DataStore as log transport; reserve it for persistence-critical player data.
+- Collect aggregates instead of raw event firehoses.
+- Metrics layers:
+  - client: FPS/input latency/UI error counters (infrequent send);
+  - server: heartbeat timing, object counts, memory, remote throughput;
+  - gameplay: interval aggregates (shots, hits, damage totals).
+- Use MemoryStoreService as short-lived buffer or HttpService to external telemetry backend.
+
+Scaling playbook
+- Keep server-authoritative logic for combat/economy/state.
+- Apply interest management and spatial routing so players receive nearby-relevant events only.
+- Prefer object pooling and reduced update rates for distant entities.
+- Consider Actor/Parallel Luau for CPU-heavy AI/projectile subsystems where architecture permits.
+
+Network protocol budgets
+- Keep RemoteEvent cadence conservative (common production target ~20-30 msg/sec per player).
+- Keep payload compact (often under ~1KB practical target).
+- Avoid per-frame full-state replication from clients; use input + periodic corrections.
+- Compress schemas with numeric IDs, rounded vectors, and minimal required fields.
+
+Team/release operations
+- Organize by systems, not by isolated object scripts.
+- Enforce module lifecycle contracts (Init/Start/Shutdown).
+- Use feature flags, canary rollout, and fast rollback paths (V1/V2 switching).
+- Treat dataflow efficiency as first-class: fewer remotes, fewer allocations, fewer expensive physics updates.
+
+==================================================
+PROJECT PATTERN NOTE: FEATURE FLAGS + SERVER AUTHORITY
+==================================================
+Release and rollback pattern
+- Keep feature flags in code paths to switch between legacy and V2 subsystems instantly.
+- This enables operational rollback without full version revert.
+
+Telemetry preference in production
+- Prioritize gameplay aggregates over raw frame logs:
+  - shots/events per interval,
+  - remote call volume,
+  - active physics/object counts,
+  - heartbeat workload indicators.
+- Interval counters (e.g., per 10s window) provide fast overload signals.
+
+Heartbeat hygiene
+- Keep Heartbeat loops allocation-free (avoid Instance.new/Destroy in-frame).
+- Restrict per-frame path to pure calculations/state transitions.
+
+Architecture preference
+- Thin controller + pure logic modules:
+  - controller handles orchestration,
+  - movement/damage modules operate on data contracts,
+  - environment bindings are minimized at logic layer.
+
+Component damage model
+- Store health/armor per physical part to support subsystem damage (tracks/turret/etc.).
+- Apply hit resolution to impacted part first, then derive system-level consequences.
+
+Authority and anti-cheat baseline
+- Accept only input intent from client (e.g., throttle/steer), not authoritative positions.
+- Server resolves movement/fire/cooldown/fuel and broadcasts results.
+- Critical threats: damage spoofing, remote spam, direct movement tampering.
+
+==================================================
+PRODUCTION BLUEPRINT: VALIDATION / PROJECTILES / RELEASE OPS
+==================================================
+Validation and remote handling
+- Treat all client payload as untrusted intent.
+- Server handlers should apply: action whitelist -> schema/type/range validation -> ownership and distance checks.
+- Keep cooldowns server-owned with Heartbeat dt updates keyed by userId.
+
+Time handling
+- Do not compare client tick() to server clock without handshake offset.
+- Preferred: server-only authoritative timers; optional time-sync for reconciliation hints.
+
+Projectile and damage pipeline
+- Preferred deterministic path: server raycast verification (or stepped server simulation) before damage apply.
+- Keep a single damage entry-point (part health + armor logic + telemetry + destruction hooks).
+- Use Touched only as fallback/compat path, not sole source of truth under stress.
+
+Pooling discipline
+- Precreate and reuse projectile/VFX/UI instances.
+- Release path must reset velocity/state/visibility and detach temporary listeners.
+
+Telemetry and operations
+- Aggregate metrics in intervals (shots/hits/damage/remote throughput/heartbeat load).
+- Send batched telemetry via MemoryStore/HttpService, not DataStore logs.
+
+Release workflow
+- Feature flags for staged rollout and instant rollback.
+- Canary cohorts before full rollout; maintain V1/V2 switch path.
+- Pre-release checks: CPU/physics/network profile + smoke tests under simulated high load.
+
+Anti-cheat baseline controls
+- Rate-limit remotes per user/action.
+- Enforce value bounds and whitelist IDs.
+- Reject impossible movement/fire patterns.
+- Keep evidence counters for suspicious behavior and apply progressive penalties.
+
+==================================================
+GUI, LOCALSCRIPT, PHYSICS, JOINTS — EXTENDED PRACTICAL REFERENCE
+==================================================
+
+Client role and responsibility split
+- Client handles input, prediction, UI, VFX/SFX, and presentation.
+- Server remains authoritative for game state: position truth, damage, economy, persistence.
+- Rule: client proposes intent, server computes result.
+
+StarterGui vs PlayerGui vs LocalScript
+- StarterGui: template container cloned to each player's PlayerGui.
+- PlayerGui: runtime UI container per player.
+- LocalScript runs only in client-executable containers (StarterGui/StarterPlayerScripts/
+  StarterCharacterScripts/Backpack/ReplicatedFirst); it will not run from ReplicatedStorage.
+- Server-side scripts (ServerScriptService) should not host client UI behavior.
+
+Core GUI objects and usage
+- ScreenGui: top-level screen UI container; use ResetOnSpawn=false for persistent HUD when needed.
+- Frame/TextLabel/TextButton/ImageLabel/ImageButton: standard UI primitives.
+- Prefer Activated for cross-platform button interaction over MouseButton1Click.
+- ScrollingFrame: use AutomaticCanvasSize and layouts carefully to avoid expensive relayout churn.
+- BillboardGui/SurfaceGui: world-space UI; useful but heavier than ScreenGui, add culling.
+
+UDim2, AnchorPoint, responsiveness
+- Use Scale for device-responsiveness, Offset for precise corrections.
+- Use AnchorPoint (e.g., 0.5, 0.5) for predictable centering.
+- Add UIAspectRatioConstraint/UIScale for robust multi-resolution behavior.
+
+Layout systems and cost
+- UIListLayout/UIGridLayout are convenient but can cause relayout spikes under frequent insert/remove.
+- Batch UI updates and minimize per-frame structural changes.
+- AutomaticSize/TextScaled are useful but can trigger extra recalculations under heavy updates.
+
+Input best practices
+- Use UserInputService + ContextActionService for multi-platform controls.
+- Respect gameProcessedEvent.
+- All gameplay consequences from input must be validated server-side.
+
+GUI pooling and update batching
+- Reuse popup widgets/elements instead of frequent create/destroy.
+- For damage popups: pool BillboardGui (world) or ScreenGui elements (HUD).
+- Batch property updates (task.defer / next-frame grouping) to reduce layout thrash.
+
+Text and localization
+- Use TextService:GetTextSize for controlled sizing workflows.
+- Avoid heavy dynamic TextScaled updates in tight loops.
+- Use key-based localization pipeline instead of duplicating per-language GUIs.
+
+Platform adaptation
+- Detect TouchEnabled/GamepadEnabled and adapt interaction sizes/layouts.
+- ContextActionService helps unify actions across desktop/mobile/console.
+
+Sound/VFX client patterns
+- Parent Sound to Part/Attachment for 3D spatialization; use UI-local placement for UI sounds.
+- Pool sounds and emitters where possible.
+- Server triggers authoritative event; clients render visual-only effects.
+
+GUI security
+- Never trust LocalScript/GUI values for purchases, rewards, damage, or progression updates.
+- Do not expose secrets/prices/authority logic in client-only code.
+
+ScreenGui placement reminders
+- Runtime ScreenGui belongs in PlayerGui.
+- For early loading visuals use ReplicatedFirst bootstrap strategy.
+
+Minimal HUD pattern (concept)
+- Create ScreenGui in PlayerGui.
+- Add Frame/TextLabel for status.
+- Animate transitions via TweenService and keep updates event-driven.
+
+==================================================
+PHYSICS OBJECTS, JOINTS, ACTUATORS — DEEP NOTES
+==================================================
+
+BasePart practicals
+- Key properties: CFrame, AssemblyLinearVelocity, AssemblyAngularVelocity, Anchored, CanCollide,
+  Massless, CustomPhysicalProperties, CollisionGroup.
+- Assemblies unify physically connected parts; tune assembly-level behavior deliberately.
+- Prefer actuator-driven movement over direct CFrame edits for physically simulated objects.
+
+Part family usage notes
+- Part: cheap, general-purpose collider/prototype.
+- MeshPart: rich visuals, watch render/collision cost.
+- TrussPart: structural lattice-like segments for long frame elements.
+- UnionOperation: useful geometry shortcut but can have performance/collision caveats.
+- Terrain edits are expensive; batch and schedule updates.
+
+Constraints and joints
+- WeldConstraint: efficient rigid links.
+- Motor6D: animation rig joint (not a physical suspension substitute).
+- Hinge/BallSocket/Spring/Rod: physical joints with CPU cost at scale.
+- AlignPosition/AlignOrientation: powerful, but expensive when overused.
+- Attachments are central lightweight anchors for constraints and effects.
+
+Actuators and legacy body movers
+- Prefer VectorForce/LinearVelocity/AngularVelocity actuators in modern projects.
+- Legacy BodyVelocity/BodyAngularVelocity may work but are less preferred long-term.
+- Avoid continuous direct CFrame force-simulation hacks for dynamic physics objects.
+
+Network ownership and vehicles
+- Ownership transfer can improve smoothness for controlled vehicles.
+- Server must still verify critical outcomes (hits, impossible movement, cooldown legality).
+- Return ownership safely on exit/detach and keep reconciliation strategy.
+
+Hit detection strategy
+- Hitscan: server raycast at fire event.
+- Fast projectiles: stepped server raycast path or deterministic server simulation.
+- Physical projectile Touched can remain fallback, but should not be the sole truth under stress.
+- AoE: use modern overlap queries with filtering via OverlapParams/collision groups.
+
+Physics performance guidelines
+- Limit simultaneous dynamic parts/constraints in dense zones.
+- Keep static environment anchored.
+- Use collision groups to disable unnecessary collisions.
+- Pool projectile instances and expensive effects.
+- Move heavy operations out of every-frame loops where possible.
+
+VectorForce movement pattern (concept)
+- Use physics root + Attachment + VectorForce.
+- Compute desired acceleration and apply Force = mass * desiredAccel.
+- Keep update loop deterministic and clamped.
+
+Common physics pitfalls
+- Frequent Anchored toggles on active objects can cause instability spikes.
+- Uncontrolled network ownership is exploitable without server verification.
+- Creating constraints in Heartbeat loops is expensive; initialize once and reuse.
+
+Combined server-client pipeline pattern
+- Server applies authoritative result.
+- Server sends compact event to relevant clients.
+- Clients render VFX/SFX/UI through local pools and culling.
+
+Client VFX remote pattern note
+- Validate action names and payload shape client-side before effect playback.
+- Acquire effect from pool, enable briefly, then release/reset.
+
+Testing recommendations
+- UI test matrix across desktop/mobile aspect ratios and constraints.
+- Physics stress tests with multiple Studio clients and profiler/network inspection.
+
+Final checklist (GUI + Physics + Network)
+- ScreenGui placement correct (PlayerGui runtime, StarterGui templates).
+- Input throttled and platform-safe (ContextActionService/UserInputService).
+- Server-authoritative movement/damage/cooldowns.
+- Remote payloads schema-validated.
+- Pooling enabled for repeat objects.
+- Minimal FireAllClients usage; prefer relevance routing.
+- No Instance allocation churn in hot loops.
+- Profiling performed for heartbeat/physics/network.
+
+==================================================
+UI DESIGN SYSTEMS: BUTTONS, PANELS, SCROLLING LISTS, THEMING
+==================================================
+
+Design-first principles
+- Start from UX flow (primary action, secondary action, loading/error states), then style.
+- Keep design tokens centralized (colors, spacing, radii, fonts, transitions).
+- Build clear visual hierarchy (primary CTA contrast, subdued secondary actions).
+- Accessibility baseline: touch targets ~44-48 px and readable contrast for key text.
+- Fast feedback for interactive states: hover, pressed, focused, disabled, loading.
+
+Theme module guidance
+- Keep a shared Theme module with:
+  - colors: primary/accent/surface/background/text/disabled/danger/success,
+  - spacing scale,
+  - corner radii,
+  - font choices,
+  - button size presets and transition timings.
+- Treat Theme as single source of truth for UI consistency and quick restyling.
+
+GUI placement/runtime behavior
+- StarterGui stores templates; PlayerGui holds runtime instances per player.
+- LocalScripts should drive client UI behavior from valid client containers.
+- ScreenGui should render from PlayerGui; avoid runtime HUD logic in server scripts.
+
+Button component standards
+- Recommended states: idle, hover, pressed, focused, disabled, loading.
+- Common composition: background frame + label + UICorner + optional UIStroke/icon.
+- Prefer Activated semantics for cross-platform input behavior.
+- Use small tweened scale/color transitions (without triggering layout-heavy rebuilds).
+
+Scrollable lists at scale
+- Large ScrollingFrame content requires virtualization/pooling.
+- Avoid full create/destroy churn on every scroll update.
+- Keep visible-window nodes + buffer, map data to reused item views.
+- Control CanvasSize manually for large datasets where layout auto-sizing is costly.
+
+Virtualized list pattern (concept)
+- Pre-create visible item pool based on viewport height + buffer.
+- On scroll:
+  - compute start/end indices,
+  - bind data into pooled cells,
+  - recycle out-of-range cells back to pool.
+- This stabilizes memory and avoids layout thrash under long lists.
+
+UI performance cautions
+- Avoid frequent structural list mutations with active layout components.
+- Batch property updates when possible.
+- Limit heavy use of UIGradient/UIStroke on large dynamic trees.
+- Avoid per-frame create/destroy of popups; use reusable widget pools.
+
+Typography and localization notes
+- Prefer readable size tiers for headers/body/meta text.
+- Use TextService size measurement in precise layout flows.
+- Keep localization keys centralized; avoid per-language duplicated GUI trees.
+- Validate UI with different scripts/locales and fallback readability.
+
+Input/focus for desktop/mobile/console
+- Use UserInputService + ContextActionService for unified actions.
+- Support focus visuals for keyboard/gamepad navigation.
+- Keep touch hit areas generous and visually obvious.
+
+Practical component set recommendation
+- Build and reuse: Theme, ButtonFactory, Card, Modal, ListItem, VirtualList, Tooltip.
+- Keep component APIs small (SetText/SetEnabled/OnActivated/Destroy).
+- Separate data logic from view rendering to reduce coupling.
+
+Testing checklist for polished UI
+- Multi-resolution checks (desktop/tablet/mobile/console).
+- Verify responsiveness and immediate interaction feedback.
+- Profile UI usage in Studio under realistic data volumes.
+- Confirm no hot-loop allocations and acceptable frame-time during menu-heavy scenarios.
+
+==================================================
+UI COMPONENT LIBRARY BLUEPRINT + HUD INTEGRATION NOTES
+==================================================
+
+Recommended placement
+- ReplicatedStorage.ClientUI: Theme, ButtonFactory, IconButton, Card, Modal, VirtualList modules.
+- StarterPlayerScripts: HUD bootstrap LocalScript that creates/attaches ScreenGui in PlayerGui.
+- ReplicatedStorage.Assets: shared icon/image assets available to clients.
+
+Component library contract (strict style)
+- All modules should be authored with --!strict and explicit small APIs.
+- Suggested APIs:
+  - Button: SetText/SetEnabled/OnActivated/Destroy
+  - Modal: show/hideTop/hideAll
+  - VirtualList: setItems/refresh/Destroy
+- Components should expose cleanup hooks and disconnect internal RBXScriptConnection on destroy.
+
+Theme/token system
+- Keep centralized tokens for colors/spacing/radii/fonts/transitions.
+- State palette should include idle/hover/pressed/disabled/focus variants.
+- Use one source-of-truth Theme module to avoid drift across UI screens.
+
+HUD integration pattern
+- Create ScreenGui (ResetOnSpawn policy chosen explicitly) in PlayerGui.
+- Build HUD as composable cards/widgets (health/fuel/ammo/actions) using ClientUI modules.
+- Bind data updates from remotes/events to view-only setters (UI does not own authoritative state).
+- Animate lightweight property changes via TweenService and avoid layout-heavy rebuilds.
+
+Virtualized ScrollingFrame guidance
+- Long lists should use pooled/virtualized cells, not full item instantiation.
+- Maintain visible window + buffer and recycle cells on scroll.
+- Prefer manual CanvasSize control for large datasets where auto-layout becomes expensive.
+
+Common UI bug patterns and fixes
+- Layout thrash from frequent list insert/remove + AutomaticSize:
+  - fix via batched updates or virtualization.
+- Input leaks through modal overlays:
+  - fix using top ZIndex full-screen intercept layer (button/imagebutton swallow input).
+- Memory leaks from un-disconnected connections:
+  - fix with centralized connection registries and Destroy/Shutdown cleanup.
+- Overuse of RenderStepped for rare UI updates:
+  - switch to event-driven or throttled refresh.
+- Dynamic TextScaled jitter in dense UIs:
+  - use fixed TextSize + constraints in performance-critical sections.
+
+Accessibility and input ergonomics
+- Touch targets: keep practical minimum around 44-48 px.
+- Provide focus visuals and keyboard/gamepad navigation paths.
+- Use Activated semantics and ContextActionService for consistent multi-platform behavior.
+- Keep localization keys externalized; avoid hardcoded language text inside reusable components.
+
+Performance checklist for UI-heavy screens
+- No frequent Instance create/destroy in hot interaction paths.
+- Pool popups/tooltips/world markers where possible.
+- Limit expensive visual decorators (many UIStroke/UIGradient in large trees).
+- Cache frequent references instead of repeated hierarchy lookups.
+- Profile frame-time/network impact with realistic data volumes and device profiles.
+
+Integration rollout steps
+- 1) Add ClientUI modules into ReplicatedStorage.ClientUI.
+- 2) Add HUD loader in StarterPlayerScripts and mount to PlayerGui.
+- 3) Route server events to compact client view-update handlers.
+- 4) Introduce VirtualList for large inventories/logs.
+- 5) Add smoke tests for UI open/close, modal focus trap, list scrolling, and cleanup.
+
+Extended implementation note
+- For production teams, pair component library changes with visual regression screenshots,
+  review checklists, and feature-flagged rollout to minimize UX regressions.
