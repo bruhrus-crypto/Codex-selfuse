@@ -629,3 +629,44 @@ Integration rollout steps
 Extended implementation note
 - For production teams, pair component library changes with visual regression screenshots,
   review checklists, and feature-flagged rollout to minimize UX regressions.
+
+=== PHYSICS & PROPERTY REFERENCE UPDATE (FROM REVIEW) ===
+
+- Authoritative time: do not compare raw client tick/os.clock directly against server workspace:GetServerTimeNow for anti-cheat decisions. Keep cooldowns and authoritative timers on server time; client timestamp is only a hint for prediction/reconciliation.
+- Assemblies first: Roblox physics operates on assemblies, not isolated parts in most movement cases. Prefer AssemblyMass/AssemblyLinearVelocity/AssemblyAngularVelocity-aware logic.
+- Movement rule: avoid per-frame teleport-style CFrame movement for dynamic vehicles. Prefer VectorForce/AngularVelocity/impulses.
+- Hit detection rule: server raycast-first for damage authority; Touched is fallback only for VFX/simple interactions.
+- Ownership rule: network ownership can improve smoothness, but server still validates fire, cooldown, damage, and impossible movement.
+- Hot-loop rule: no Instance.new/Destroy/GetDescendants scans inside high-frequency Heartbeat loops; cache and pool.
+- Collision rule: use PhysicsService groups for scalable filtering instead of mass CanCollide toggling.
+- Lifecycle rule: long-lived state should be keyed by userId; if Instance keys are used, mandatory cleanup on PlayerRemoving/AncestryChanged.
+
+=== UI/INPUT CORRECTIONS FROM REVIEW ===
+
+- ScreenGui placement: runtime HUD must live in PlayerGui.
+- LocalScript placement: run from StarterPlayerScripts/StarterGui/StarterCharacterScripts/Backpack/ReplicatedFirst contexts; not from plain ReplicatedStorage.
+- Button input: prefer Activated for cross-platform input semantics; add focus visuals for gamepad/keyboard.
+- ScrollingFrame: for long lists use virtualization + pooling; avoid layout thrash from frequent insert/remove with auto sizing.
+- Modal safety: overlay should swallow input and be placed at top ZIndex; disable underlying interactive widgets while modal is open.
+- Performance: minimize heavy UIStroke/UIGradient usage on large dynamic lists.
+
+=== PRODUCTION PHYSICS CHECKLIST (ADDED) ===
+
+1) One physics root per moving vehicle + welded structure.
+2) Force model: VectorForce/AngularVelocity for continuous motion, ApplyImpulse for one-shot impulses.
+3) Server raycast damage pipeline with whitelist validation.
+4) Per-player input throttling and validation (range/type/ownership).
+5) Interest-based event routing (prefer FireClient to relevant players).
+6) Object pooling for projectiles/VFX/UI popups.
+7) Collision-group matrix tuned for gameplay objects.
+8) Heartbeat loops kept allocation-light.
+9) Periodic reconciliation for predicted client movement.
+10) Logging with levels + throttling for reject/error storms.
+
+=== REMOTE SECURITY NOTES (ADDED) ===
+
+- RemoteEvent.OnServerEvent: first argument is always player; validate all payload fields.
+- RemoteFunction Invoke* is blocking; avoid in hot paths.
+- Never accept client-submitted final damage/position as truth.
+- Validate numeric ranges with clamp and schema checks before applying game state.
+
