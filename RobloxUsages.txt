@@ -670,3 +670,24 @@ Extended implementation note
 - Never accept client-submitted final damage/position as truth.
 - Validate numeric ranges with clamp and schema checks before applying game state.
 
+
+=== PATCHED LESSONS FROM MEGA DEMO REVIEW ===
+
+Runtime/API correctness
+- Tween.Completed:Once is invalid in Roblox; use Completed:Connect(...) and disconnect manually.
+- Keep client timestamps non-authoritative; do not reject gameplay based on raw client tick drift vs server clock.
+
+Security and validation
+- Server validation order: action whitelist -> payload schema/range/finite checks -> rate checks -> game logic.
+- Add finite-number guards for Vector3 payloads (NaN/Inf hardening).
+- Keep per-action reject/rate metrics in rolling windows.
+
+Performance and lifecycle
+- Pool VFX on client and projectiles on server; avoid repeated create/destroy bursts.
+- Place inactive server pool instances in ServerStorage/pool folders instead of leaving them in Workspace.
+- Prefer squared-distance checks in frequent proximity filters; move to sector grids for larger sessions.
+- Keep Heartbeat loops allocation-light and avoid no-op allocations/log noise lines.
+
+Consistency
+- Keep payload naming consistent across shared types and runtime (`ownerId` vs `owner` mismatch should be eliminated).
+- Ensure cleanup hooks for connections and pooled state on shutdown/respawn/player removal.

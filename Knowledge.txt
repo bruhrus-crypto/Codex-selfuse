@@ -610,3 +610,16 @@ Roadmap внедрения
 - 4) server-raycast-first hit pipeline.
 - 5) centralized telemetry.
 - 6) feature-flag canary + smoke/perf preflight.
+
+Part 24: Mega demo review corrections (critical learnings)
+- Client bug: RBXScriptSignal has no :Once(); Tween.Completed must use :Connect() + manual disconnect (or :Wait()).
+- Time-source safety: never hard-compare client tick()/os.clock() with workspace:GetServerTimeNow(); keep authoritative cooldown/validation on server time.
+- If time sync is needed, store per-user offset from handshake and treat clientTick as prediction hint only.
+- VFX should be pooled client-side too; avoid Instance.new per hit burst.
+- Prefer Heartbeat/task loop for network send cadence; keep RenderStepped for rendering-sensitive tasks.
+- Remove no-op allocations (example: Debris:AddItem(Instance.new("Folder"),0)).
+- Server pools should live in dedicated containers (ServerStorage/hidden pool folder), not leave inactive artifacts in Workspace.
+- For high-rate proximity checks, use squared-distance compare and evolve to sector/spatial indexing.
+- Add finite guards for numeric vectors from client payloads (NaN/Inf defense).
+- Whitelist action names before expensive logic; unknown actions handled separately (and optionally separately metered).
+- Reject counters should use a time window/sliding buckets, not unbounded lifetime increments.
