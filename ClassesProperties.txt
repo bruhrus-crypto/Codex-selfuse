@@ -1,0 +1,123 @@
+ClassesProperties.txt
+Формат: Свойство — Короткое описание — Применимо к — Рекомендации/примечания.
+
+[BasePart / Part / MeshPart]
+Shape — Форма детали — Part — Для простых коллайдеров; MeshPart использует mesh-геометрию.
+Size — Размер (Vector3) — BasePart — Влияет на объём и массу.
+CFrame — Позиция+ориентация — BasePart — Для телепорта/инициализации; не использовать как постоянный драйвер физики.
+Position — Позиция — BasePart — Запись изменяет CFrame.
+Orientation — Эйлеровы углы — BasePart — Для чтения удобно, для точных операций лучше CFrame.
+Anchored — Закреплённость — BasePart — true для статики, false для динамики.
+CanCollide — Коллизии — BasePart — Лучше управлять матрицей через PhysicsService.
+Massless — Исключение массы части — BasePart — Для декоративных деталей; не для физического ядра.
+CustomPhysicalProperties — Density/Friction/Elasticity и веса — BasePart/MeshPart/UnionOperation — Настраивать при спавне, не в hot-loop.
+Material — Материал — BasePart/MeshPart — Влияет на поведение/визуал.
+Transparency — Прозрачность — BasePart — Много полупрозрачных деталей дороже рендеру.
+Reflectance — Отражение — BasePart — Использовать умеренно.
+CollisionGroup / CollisionGroupId — Группа коллизий — BasePart — Назначать через PhysicsService.
+AssemblyMass — Масса assembly — BasePart — Предпочтительно для расчётов сил.
+AssemblyLinearVelocity — Линейная скорость assembly — BasePart — Для контроля/коррекции движения.
+AssemblyAngularVelocity — Угловая скорость assembly — BasePart — Для устойчивости/овертерн детекта.
+Velocity — Скорость части — BasePart — Для assemblies ориентироваться на AssemblyLinearVelocity.
+Locked — Блок в редакторе — BasePart — Удобно для level geometry.
+CastShadow — Отбрасывание тени — BasePart — Можно отключать для мелкой декорации.
+TopSurface/BottomSurface/SurfaceType — Тип поверхности — BasePart — Legacy-поля; применять осторожно.
+
+[MeshPart / UnionOperation / TrussPart]
+MeshId — Идентификатор mesh — MeshPart — Избегать чрезмерно тяжёлых мешей.
+TextureID — Текстура mesh — MeshPart — Следить за размером и памятью.
+UsePartColor/CollisionFidelity (по необходимости) — Визуал/коллизия — MeshPart/UnionOperation — Тестировать на performance.
+
+[Model / Assembly]
+PrimaryPart — Опорная часть модели — Model — Обязательна для PivotTo и корректных трансформов.
+PivotTo (метод) — Перемещение модели как целого — Model — Лучше единичных сдвигов частей.
+GetDescendants (метод) — Обход дерева — Instance/Model — Не вызывать часто в hot-loop.
+
+[Attachments / Constraints]
+Attachment.Position / Orientation — Локальная привязка — Attachment — База для сил/лучей/эффектов.
+Attachment.WorldPosition / WorldOrientation — Мировые значения — Attachment — Удобно для дебага.
+Attachment0 / Attachment1 — Точки constraint — Большинство Constraints — Предпочитать Attachment-пайплайн.
+Enabled — Вкл/выкл constraint — Constraints — Выключать, когда не нужен.
+MaxForce / MaxTorque — Ограничение сил/момента — Align*/Actuators — Не ставить бесконтрольные infinity.
+Responsiveness — Отклик — AlignPosition/AlignOrientation — Чем выше, тем дороже CPU.
+RigidityEnabled — Жёсткий режим — Align* — Использовать аккуратно.
+
+[Actuators]
+VectorForce.Force — Сила — VectorForce — Обычно Force = mass * desiredAccel.
+VectorForce.Attachment0 — Точка приложения — VectorForce — Обязательна для корректной работы.
+LinearVelocity.VectorVelocity/MaxForce — Управляемая скорость — LinearVelocity — Для контролируемого движения.
+AngularVelocity.AngularVelocity/MaxTorque — Угловое движение — AngularVelocity — Для управляемых вращений.
+BodyAngularVelocity.AngularVelocity/MaxTorque — Legacy-угловой драйвер — BodyAngularVelocity — Работает, но новые actuators предпочтительнее.
+
+[Motor6D / Animation]
+Motor6D.Part0/Part1 — Связанные части — Motor6D — Используется в ригах.
+Motor6D.C0/C1 — Локальные оффсеты — Motor6D — Для программного поворота/анимаций.
+Motor6D.Transform — Доп. трансформ — Motor6D — Применять осознанно с анимационным пайплайном.
+Animation.AnimationId — ID анимации — Animation — Кешировать, не создавать бесконтрольно.
+AnimationTrack.Length — Длина — AnimationTrack — Read-only.
+AnimationTrack:Play/Stop/AdjustSpeed/AdjustWeight — Управление треком — AnimationTrack — Вызывать с проверками наличия Animator.
+
+[Humanoid / Character]
+Humanoid.Health/MaxHealth — ХП — Humanoid — Сервер авторитетен для изменений.
+Humanoid.WalkSpeed — Скорость — Humanoid — Для персонажей; не заменяет vehicle-physics.
+Humanoid.JumpPower/JumpHeight — Прыжок — Humanoid — Проверять под целевой rig.
+Humanoid.PlatformStand — Блок стандартного движения — Humanoid — Полезно при takeover транспорта.
+HumanoidRootPart — Референс позиционирования — Character Model — Для дистанций/проверок.
+
+[Sound]
+Sound.SoundId — Asset ID — Sound — Формат rbxassetid://<id>.
+Sound.Volume — Громкость — Sound — Держать в разумных пределах.
+Sound.PlaybackSpeed — Скорость — Sound — Для вариативности эффектов.
+Sound.Looped — Зацикливание — Sound — Для фона/двигателей.
+Sound.RollOffMode/MaxDistance/EmitterSize — Пространственный спад — Sound — Ключ к оптимальному 3D-звуку.
+
+[VFX]
+ParticleEmitter.Enabled — Вкл/выкл — ParticleEmitter — Переключать, не пересоздавать.
+ParticleEmitter.Rate/Lifetime/Speed/Acceleration/Size/Color/SpreadAngle — Параметры частиц — ParticleEmitter — Ограничивать под performance.
+Beam.Attachment0/Attachment1/Width0/Width1 — Луч — Beam — Нужны корректные attachments.
+Trail.Attachment0/Attachment1/Lifetime — След — Trail — Полезен для трассеров.
+
+[GUI]
+ScreenGui.ResetOnSpawn — Сброс при респавне — ScreenGui — false для persistent HUD.
+ScreenGui.DisplayOrder — Слой экрана — ScreenGui — Управляет приоритетом.
+ScreenGui.IgnoreGuiInset — Игнор safe-area/верхнюю панель — ScreenGui — Для full-screen UI.
+GuiObject.Size/Position — Размер/позиция — GuiObject — Комбинировать Scale+Offset+AnchorPoint.
+GuiObject.Visible — Видимость — GuiObject — Предпочтительно toggle вместо Destroy/Create.
+Frame.BackgroundColor3/BackgroundTransparency/ClipsDescendants — Фон/клиппинг — Frame — Важно для контейнеров и скролла.
+TextLabel/TextButton.Text — Текст — TextLabel/TextButton — Локализовать, не хардкодить массово.
+TextLabel.Font/TextSize/TextColor3/TextScaled — Типографика — TextLabel/TextButton — TextScaled осторожно на динамических списках.
+TextButton.AutoButtonColor — Авто-подсветка — TextButton — Часто отключают ради кастомной анимации.
+ImageLabel/ImageButton.Image — Иконка — ImageLabel/ImageButton — Оптимизировать ассеты.
+ScrollingFrame.CanvasSize/CanvasPosition/ScrollBarThickness — Скролл-канва — ScrollingFrame — Для длинных списков применять виртуализацию.
+UIListLayout.SortOrder/Padding — Лейаут — UIListLayout — Следить за layout thrash.
+UIGridLayout.CellSize/CellPadding — Сетка — UIGridLayout — Полезно для инвентаря.
+UICorner.CornerRadius — Скругление — UICorner — Лёгкий визуальный стандарт.
+UIStroke.Thickness/Color/Transparency — Контур — UIStroke — Много контуров = дороже.
+UIAspectRatioConstraint.AspectRatio — Соотношение сторон — UIAspectRatioConstraint — Для адаптивных картинок/кнопок.
+UIScale.Scale — Масштаб UI — UIScale — Удобно для platform-specific tuning.
+
+[Networking]
+RemoteEvent.FireServer — Клиент -> сервер — RemoteEvent — Сервер не вызывает FireServer.
+RemoteEvent.OnServerEvent — Серверный обработчик — RemoteEvent — Первый аргумент всегда player.
+RemoteEvent.FireClient/FireAllClients — Сервер -> клиент(ы) — RemoteEvent — Предпочитать адресную/релевантную рассылку.
+RemoteFunction.InvokeServer/InvokeClient — Синхронные вызовы — RemoteFunction — Использовать редко, избегать hot-path.
+BindableEvent/BindableFunction — Локальная шина в одном окружении — Bindables — Не реплицируются по сети.
+
+[Raycast / Queries]
+RaycastParams.FilterDescendantsInstances — Фильтр объектов — RaycastParams — Исключать shooter/self-модель.
+RaycastParams.FilterType — Include/Exclude — RaycastParams — Обычно Exclude для self-filter.
+RaycastParams.IgnoreWater — Игнор воды — RaycastParams — По задаче.
+
+[Services / misc]
+Lighting.TimeOfDay/ClockTime/Brightness/Ambient/OutdoorAmbient — Освещение — Lighting — Баланс визуала и производительности.
+Players.LocalPlayer/UserId/Name/DisplayName — Игрок — Players/Player — Long-lived state индексировать по UserId.
+Script.Disabled — Отключение скрипта — Script/LocalScript — Не оставлять production-мертвый код без пояснений.
+Instance.Parent — Родитель — Instance — Изменение Parent триггерит lifecycle/репликацию.
+CollectionService:AddTag/GetTagged — Теги — CollectionService — Удобно для групповых выборок.
+DataStore UpdateAsync/GetAsync (API) — Персистентность — DataStoreService — Retry/backoff обязателен.
+
+Примечания:
+- Проверять typeof/IsA перед доступом к объектам из payload.
+- Для long-lived таблиц предпочитать userId-ключи.
+- Физические параметры задавать при spawn/клонировании, не в горячих циклах.
+- GUI стили держать в Theme-таблице для консистентности.
