@@ -1,0 +1,625 @@
+Luau lessons notebook
+
+Part 3: Practical Luau usage in Roblox
+- Organize game logic into modular systems (players, economy, combat, UI, events) using
+  ModuleScripts that return tables and are imported via require.
+- Players/characters: work with Player and Model objects; manage health, movement, inventory,
+  and listen to events via Connect; keep per-player state tables.
+- Events: use Roblox events (Touched, Changed, PlayerAdded/Removing) and custom BindableEvents/
+  RemoteEvents for client-server communication; handle typed parameters safely.
+- Animations/Tweening: use Animation/AnimationTrack and TweenService for character motion and UI
+  effects; type checks help ensure correct targets/args.
+- Performance: cache properties, minimize allocations, prefer locals, avoid heavy per-frame work;
+  leverage Luau optimizations and type checks.
+- GUI: ScreenGui/Frame/TextLabel/TextButton with event-driven updates; keep client/server sync
+  using remotes.
+- Data persistence: DataStoreService for save/load; handle async, errors, quotas; use typed
+  schemas for stored data.
+- Security: sandboxed environment; limit access to sensitive resources; keep client/server
+  responsibilities separated and validate remote inputs.
+
+Part 4: Advanced patterns and optimization in Roblox
+- Build custom systems (combat, economy, quests, inventory, progression) as modules with clear
+  init/update/event/state interfaces; use events or managers to reduce coupling.
+- State managers: dedicated modules to store and sync player/object state (health, level,
+  effects), exposed via typed getters/setters and synced over remotes.
+- Event-driven architecture: use BindableEvents/RemoteEvents for gameplay flows; generate safe
+  handlers with argument validation.
+- Performance: cache hot references, reduce table churn, prefer locals, avoid per-frame allocs,
+  and clean up event connections to prevent leaks.
+- Custom data structures: queues/stacks/graphs/trees via tables/metatables for AI routing,
+  inventory, auctions; use typed accessors.
+- Async/timers: coroutines, RunService, and delay-style timers with error handling to avoid
+  blocking the main thread.
+- Networking/security: validate all client input on the server; enforce ranges/types and logic
+  to reduce cheating.
+- Modular structure best practices: single-responsibility modules, clear interfaces, testable
+  boundaries, safe dependency wiring.
+- Logging/debugging: centralized logging modules with severity levels and timestamps.
+- Best practices: locals in hot paths, separate client/server code, type everything, validate
+  remotes, minimize allocations, use events/coroutines for async work.
+
+Part 5: Practical templates and patterns (Luau in Roblox)
+- Recommended project layout with ServerScriptService modules, ReplicatedStorage remotes/shared
+  types, and client modules (UI/animations).
+- Architecture principles: server-authoritative logic, client-only visuals, clear module
+  interfaces (Init/Shutdown/GetState/ApplyAction), validate all client input.
+- PlayerStateManager template: typed player state, ApplyDamage/GiveItem helpers, cleanup on leave.
+- CombatSystem template: server-side validation (cooldowns, distance, payload checks), apply damage
+  via PlayerStateManager, notify clients via RemoteEvent.
+- Inventory/Economy template: server-side BuyItem with currency checks; never trust client prices.
+- QuestSystem template: per-player quest progress with save/load via DataStore wrapper.
+- DataStore wrapper: retry/backoff for SetAsync/GetAsync, periodic saves, avoid hot loops.
+- AnimationController (client): load and play AnimationTracks, keep local effects client-side.
+- Remote patterns: OnServerEvent player arg first; whitelist actions; validate payloads/ranges.
+- Testability: keep logic modular/pure when possible; use mocks for integration tests.
+- Logger module: INFO/WARN/ERROR helpers with debug toggle.
+- Security/anti-cheat: server timers/cooldowns, rate limiting, distance checks, log suspicious
+  activity.
+- Hot path optimizations: cache services, reduce allocations, prefer locals/ipairs, reuse tables.
+- Deployment checklist: create folder layout, add remotes, wire requires, test in Studio with
+  multi-client sessions.
+- Typical vulnerabilities and fixes: disallow client currency adds, validate targets/cooldowns,
+  check target existence before applying effects.
+- Codex usage tips: share module structure/types, generate tests, specify preconditions and
+  ranges, build dev-only debug commands with admin checks.
+
+Part 6: Roblox Luau runtime globals, VM vs runtime vs API, and Roblox API layer
+Roblox Luau runtime globals (selected, practical)
+- task library: task.wait, task.delay, task.spawn, task.defer, task.cancel, task.synchronize,
+  task.desynchronize (availability may vary by context).
+- coroutine in Roblox: coroutine.create, coroutine.resume, coroutine.yield, coroutine.wrap,
+  coroutine.running, coroutine.status, coroutine.isyieldable, coroutine.close (behavior may be
+  constrained by sandbox; use task.* for scheduling in most gameplay code).
+- core globals: require, typeof, assert, error, print, warn, pcall, xpcall, pairs, ipairs,
+  next, select, tonumber, tostring, type, rawget/rawset/rawlen (subset can vary by environment).
+- legacy environment helpers (availability depends on Roblox version/security): getrenv,
+  getsenv, getfenv, setfenv, newproxy (often unavailable or restricted in standard Roblox
+  runtime; do not rely on them for production gameplay code).
+- sandbox reality: no file system access, limited os/debug usage; many stdlib features are
+  intentionally unavailable or restricted.
+
+VM vs runtime vs API (practical boundary)
+- Luau VM (language + standard libs): what you see in luau-lang/luau VM sources (base/string/
+  table/math/etc). This is the language implementation and default libraries.
+- Roblox runtime (sandbox): Roblox hosts the VM and decides which globals/libs are exposed or
+  modified (e.g., limited os/debug, no filesystem, task scheduler, security restrictions).
+- Roblox API (platform objects): services, instances, events, remotes, and engine types that
+  exist outside the VM and are provided by the Roblox engine.
+Examples of boundary impact:
+- VM provides string/table/math; runtime decides whether os/debug exist; API provides
+  game:GetService, Instance, Players, RunService, TweenService, etc.
+- Type annotations can cover Luau language types, but Roblox API types (Instance, Vector3,
+  CFrame, RBXScriptSignal) are provided by Roblox type definitions, not the VM.
+- Code portability: VM-level code can run in standalone Luau; runtime/API code requires Roblox.
+
+Roblox API layer details moved to `RobloxUsages.txt` (services, classes, replication, storage and usage traps).
+
+Part 7: Roblox Luau runtime globals (practical list)
+Core globals (commonly available)
+- assert, error, warn, print
+- type, typeof, tostring, tonumber
+- pairs, ipairs, next, select
+- pcall, xpcall
+- rawget, rawset, rawlen
+- require
+
+Time/scheduling
+- task.wait, task.delay, task.spawn, task.defer
+- task.cancel (for deferred threads) and task.synchronize/task.desynchronize (context-specific)
+- wait, delay, spawn (legacy aliases; prefer task.* in new code)
+
+Coroutines
+- coroutine.create, coroutine.resume, coroutine.yield, coroutine.wrap
+- coroutine.running, coroutine.status, coroutine.isyieldable, coroutine.close
+
+Runtime-only helpers (availability varies; use with caution)
+- getrenv, getsenv (often restricted; may require plugin/Studio contexts)
+- getfenv, setfenv, newproxy (legacy/limited; not for production gameplay)
+
+Roblox-provided globals (engine layer, not Luau stdlib)
+- game, workspace, script, shared
+- Enum, Instance (constructor-like access via Instance.new)
+- Vector3, Vector2, CFrame, Color3, UDim2, UDim, BrickColor, Ray, Region3
+
+Notes
+- os/debug libraries are limited or unavailable in Roblox runtime.
+- File system and arbitrary OS access are not available.
+
+RunService timing (core game loop)
+- RunService.Heartbeat: runs after physics each frame; available on server and client; suitable
+  for gameplay logic that depends on completed physics.
+- RunService.Stepped: runs before physics each frame (legacy signature includes time/step); good
+  for stepping simulation or pre-physics adjustments; available on server and client.
+- RunService.RenderStepped: client-only; runs before frame render; best for camera/UI/visuals and
+  should not drive authoritative gameplay.
+- Client vs server: RenderStepped is client-only; Heartbeat/Stepped exist on both; keep
+  server-authoritative logic on server Heartbeat/Stepped and client-only visuals on RenderStepped.
+
+Part 9: Advanced scheduling and time management in Roblox Luau
+- task library: task.wait (better precision than legacy wait), task.delay (defer callback),
+  task.spawn (preferred over spawn), task.defer (post-yield scheduling), task.cancel
+  (cancel deferred work); task.synchronize/desynchronize are engine/Studio-specific and
+  not for typical gameplay.
+- Legacy wait/delay/spawn: keep for compatibility only; less predictable timing.
+- Coroutines: coroutine.create/resume/yield provide low-level control; prefer task.* for
+  gameplay scheduling; sandbox limits apply.
+- RunService: Heartbeat (after physics, server+client), Stepped (before physics, server+client),
+  RenderStepped (client-only before render).
+- Scheduler rules: avoid blocking the main thread, use Heartbeat + deltaTime for cooldowns and
+  animation timing instead of raw os.clock(), split heavy work via task.defer or coroutines.
+
+Part 10: Roblox type system and type safety
+- Luau annotations: type X = { field: number, optionalField: string? } and export type for
+  shared module APIs.
+- Use types around RemoteEvent/RemoteFunction payloads so server validation can be explicit and
+  predictable.
+- Roblox API types: Instance, Player, Model, BasePart, GuiObject, Vector3, CFrame, Color3,
+  UDim2; RBXScriptSignal for event connections.
+- Distinguish Luau language types from Roblox API object types; the latter come from Roblox
+  engine definitions.
+- Payload validation pattern: always check types and ranges (e.g., damage within bounds, target
+  exists/alive) before applying server logic.
+
+Part 11: Networking and remote patterns
+- RemoteEvent: FireServer (client->server), FireClient/FireAllClients (server->client); server
+  must validate arguments before use.
+- RemoteFunction: InvokeServer/InvokeClient for request/response flows; server remains
+  authoritative and validates inputs.
+- Best practices: whitelist allowed actions, never trust client data, keep payloads minimal,
+  use FireAllClients for visuals only while state changes remain on server.
+
+Part 12: Practical CombatSystem with proper scheduler and client/server handling
+- Scheduler-aware cooldowns: prefer RunService.Heartbeat deltaTime or workspace:GetServerTimeNow()
+  over os.clock(); store per-player remaining cooldown and decrement each frame.
+- Client vs server split: server validates attacks and applies damage via PlayerStateManager;
+  client handles visuals (animations, effects, UI timers).
+- Server authority: never trust client payloads; validate distance, cooldown, and target validity
+  on every request.
+- Event connections: store OnServerEvent/Heartbeat connections and Disconnect() them in Shutdown
+  to prevent leaks.
+- Payload validation: check types, ranges, and target existence for any incoming data.
+- Heartbeat-based cooldown implementation: update cooldown timers each frame and reject attacks
+  while remaining time > 0 for accurate multiplayer timing.
+- Modular design: Init() wires events and Heartbeat, ApplyAttack() validates/applies damage and
+  notifies clients, Shutdown() clears tables and disconnects handlers.
+- Extensible patterns: can add AoE, debuffs, multi-target logic, and effect hooks.
+
+Part 13: CombatSystem example (Heartbeat cooldown + payload validation) summary
+- Use RunService.Heartbeat for scheduler-aware cooldowns; store per-player last attack time or
+  remaining cooldown and compare against workspace:GetServerTimeNow() instead of os.clock().
+- Validate payload shape and ranges (damage type/limits, targetUserId type, target existence)
+  before any server-side action.
+- Enforce distance checks using HumanoidRootPart positions and reject attacks outside limits.
+- Keep server authoritative: apply damage via PlayerStateManager and only broadcast effects to
+  clients through RemoteEvent.
+- Track event connections (OnServerEvent and Heartbeat) and Disconnect() them in Shutdown to
+  prevent memory leaks.
+- Provide modular Init/ApplyAttack/Shutdown entrypoints to integrate via require.
+
+Part 14: ClientModules skeleton review notes (non-code)
+- AnimationController: store activeTracks on the controller (e.g., AnimationController.activeTracks)
+  instead of a local to avoid scope confusion across methods.
+- Consider explicitly controlling looping behavior (e.g., non-looped defaults) when starting tracks.
+- Use pcall around animation play or effect creation to avoid client crashes on unexpected state.
+- VFXController: avoid double-spawn by ensuring only one path runs (target-based or position-based);
+  keep BasePart checks.
+- UIController: when resolving target player, also verify Character exists before displaying UI.
+- ClientMain event routing: guard against unknown action values (allowed action map) to reduce spam
+  or unexpected payloads.
+- Add minimal allowed lists for effectType/statusType to validate incoming payloads on client.
+
+Part 1: Basics of Luau (Roblox)
+Keywords
+- local — creates a local variable scoped to the current block.
+- global — (rare in Roblox) creates a global variable; typically avoided in ModuleScripts.
+- function — declares a function.
+- return — returns a value from a function.
+- if / then / elseif / else / end — conditional blocks.
+- for / in / do / end — numeric or table iteration (e.g., for i = 1, 10 or for k, v in pairs(tbl)).
+- while / do / end — loop with condition checked first.
+- repeat / until — loop with condition checked last (runs at least once).
+- break — exits the nearest loop.
+- continue — not built-in; can be simulated via goto.
+- local function — defines a local function within scope.
+- do / end — creates a local scope block.
+- true / false — boolean values.
+- nil — absence of a value.
+- and / or / not — logical operators.
+- in — used in for ... in iteration.
+
+Basic Luau globals
+- print(...) — outputs values to the Output window.
+- warn(...) — outputs a warning (yellow) to Output.
+- error(msg) — raises an error and stops execution.
+- assert(condition, message?) — checks a condition and errors if false.
+- typeof(value) — returns Roblox-aware type (e.g., Player, Model, Vector3).
+- type(value) — returns Lua type (number, string, table, function, boolean, nil).
+- tostring(value) — converts a value to string.
+- tonumber(value) — converts a string to number if possible.
+- pairs(tbl) — iterates key/value pairs in a table.
+- ipairs(tbl) — iterates numeric indices in a table.
+- next(tbl, index?) — low-level table iterator.
+- select(index, ...) — returns the n-th argument.
+- pcall(func, ...) — protected call; returns ok, result/error.
+- xpcall(func, errHandler, ...) — protected call with error handler.
+- rawget(tbl, key) — read without metatable.
+- rawset(tbl, key, value) — write without metatable.
+- rawlen(tbl) — length without metatable.
+- require(module) — loads a ModuleScript.
+
+Roblox object/service overview moved to `RobloxUsages.txt` for centralized reference.
+
+Part 2: Data & Operators in Luau (Roblox)
+Data types
+- number — integers and floats.
+- string — text values.
+- boolean — true/false.
+- nil — absence of a value.
+- table — core container for arrays, dictionaries, and objects.
+- function — first-class values stored/passed like data.
+Roblox engine types reference moved to `RobloxUsages.txt`.
+
+Tables
+- Tables act as arrays (numeric indices) or dictionaries (key/value).
+- Nested tables model structured data (e.g., player profile + scores).
+- Iterate with ipairs for arrays and pairs for dictionaries.
+
+Metatables
+- Metatables customize table behavior (indexing, writes, operators, tostring).
+- Common metamethods: __index, __newindex, __add/__sub/__mul, __tostring.
+
+Operators
+- Arithmetic: +, -, *, /, ^, %.
+- Comparisons: ==, ~=, <, <=, >, >=.
+- Logical: and, or, not.
+- String concat: ..
+- Short-circuit defaults: value or default.
+
+Functions
+- Named/local and anonymous functions; can return multiple values.
+- Type annotations can be applied to arguments and returns.
+
+Roblox usage essentials checklist moved to `RobloxUsages.txt`.
+
+Part 15: Ошибки, корректировки и практические стандарты Roblox Luau (без кода)
+Что было сделано правильно
+- Троттлинг отправки input, safeCall/pcall для клиентских визуалов, whitelist actions/effect types,
+  хранение cooldown по userId, и rate-limit логирования отклонений — это правильные паттерны
+  надежности и античита.
+- Возврат пустой таблицы в type-only ModuleSpecs — практичный runtime-safe подход.
+
+Критичная поправка по времени
+- Нельзя напрямую сравнивать клиентский tick() и серверный workspace:GetServerTimeNow() как одну шкалу
+  времени без синхронизации offset.
+- Безопасная практика: authoritative проверки cooldown/античита вести только по серверному времени,
+  клиентский timestamp использовать как вспомогательный сигнал для prediction/reconciliation.
+
+Input/prediction
+- Отправка input должна быть с троттлингом (обычно 20-30 Hz) и по возможности только при изменении
+  состояния, чтобы снижать сетевой трафик.
+- RenderStepped/Heartbeat подходят для отправки при таймере; выбор зависит от задачи, но без спама.
+- turretYaw нужно считать от реальной целевой точки (например, mouse.Hit.Position относительно башни),
+  а camera lookVector оставлять только как временный placeholder.
+
+Память и cleanup
+- Долгоживущие таблицы лучше индексировать по userId, а не Player/Model instance.
+- Обязательная очистка в PlayerRemoving/Shutdown/CharacterRemoving и Disconnect() для всех соединений.
+- Для треков/визуалов, привязанных к моделям, нужен cleanup при Destroyed/AncestryChanged.
+
+Сеть и релевантность
+- FireAllClients применять только когда действительно нужно; иначе отправлять адресно
+  (FireClient) или с proximity filtering.
+- Payload должен быть минимальным, типизированным и проходить runtime-валидацию на сервере.
+
+Roblox Luau vs open-source Luau (практический срез)
+- Roblox Luau = язык Luau + sandbox runtime + Roblox engine API.
+- Roblox-специфика: Services, Instance-модель, RBXScriptSignal, Remotes, task API,
+  Vector3/CFrame/Color3/UDim2/Enum, RunService loop.
+- В sandbox обычно ограничены/отсутствуют низкоуровневые и опасные API (файловая система,
+  часть debug/os, некоторые legacy функции).
+
+Жесткие правила для боевой игры
+- Никогда не применять урон по клиентскому payload без server-side проверок
+  (distance, cooldown, whitelist weapon/projectile, sanity ranges).
+- Сервер авторитетен по урону, экономике, сохранению и итоговым позициям.
+- Клиентский timestamp не источник истины; при необходимости time-sync делается отдельным handshake.
+- Логи отклонений должны быть пороговыми (rate-limited), чтобы не захламлять продакшн-логи.
+
+Типизация и архитектура
+- Описывать все сетевые payload через export type в shared-слое и поддерживать runtime-валидацию.
+- Модули делать single-responsibility: StateManager, CombatSystem, ProjectileSystem, TankController,
+  TankInput, TankPrediction, TankVisuals.
+- Для hot-reload/жизненного цикла использовать конвенцию Init/Shutdown с явным cleanup.
+
+Производительность
+- Кешировать сервисы/часто используемые ссылки.
+- Избегать аллокаций в горячих циклах; использовать pooling для projectiles/VFX/UI.
+- Для массовых битв снижать трафик за счет троттлинга input, delta-передачи и релевантных рассылок.
+
+Частые ошибки, которых нужно избегать
+- Логика урона на клиенте.
+- Отсутствие cleanup соединений и таблиц.
+- Спам сетевых сообщений каждый кадр без троттлинга.
+- Сравнение разных часовых опор (tick клиента vs server time) без синхронизации.
+
+Чек-лист перед релизом
+- Все Remote payload типизированы и валидируются на сервере.
+- Есть cleanup в PlayerRemoving/Shutdown и отключение всех RBXScriptConnection.
+- Настроены pooling и профильный контроль сетевой нагрузки.
+- Покрыты тестами validate-функции и ключевые боевые сценарии.
+
+Part 16: Частые ошибки и антипаттерны Roblox Luau + практичные исправления
+Remote/сеть
+- Сервер не должен вызывать FireServer; это клиентский метод. Сервер отправляет через FireClient/FireAllClients.
+- Нельзя доверять клиентским payload без проверки типов, диапазонов, distance/cooldown и whitelist (weaponId/projectileType/action).
+- Не слать события каждый кадр без троттлинга; лучше 20-60 Hz и/или send-on-change.
+- FireAllClients использовать только для действительно глобальных событий; для большинства эффектов нужна релевантная рассылка (nearby/proximity).
+- RemoteFunction не применять для долгих/частых операций; он синхронный и легко блокирует поток.
+
+Время/цикл
+- RenderStepped только для клиента и визуала; серверная логика должна идти через Heartbeat/Stepped.
+- Клиентский tick и серверный GetServerTimeNow — разные опоры; сравнивать напрямую без time-sync нельзя.
+- Authoritative таймеры и cooldown делать только по серверному времени.
+
+Память/жизненный цикл
+- Все RBXScriptConnection хранить и отключать в Shutdown/PlayerRemoving/CharacterRemoving.
+- Долгоживущие таблицы лучше индексировать по userId; ключи-Instance требуют обязательного cleanup.
+- Частое Create/Destroy для VFX/пуль — тяжелый антипаттерн; использовать object pooling.
+
+Физика/античит
+- Не принимать хиты/позиции как истину от клиента; сервер верифицирует raycast/дистанцию/временные окна.
+- Network ownership нужен для плавности транспорта, но не отменяет server-side проверки.
+- Логи отклонений должны быть пороговыми (rate-limited), иначе прод-логи захламляются.
+
+Практичные паттерны оптимизации
+- Троттлинг + батчинг сетевых обновлений.
+- Interest management: рассылка событий только релевантным игрокам.
+- Кеширование сервисов/ссылок и снижение аллокаций в hot-loops.
+- Разделение тяжелых задач на кадры (task.defer/task.spawn с лимитами по кадру).
+- Профилирование через Studio инструменты (CPU/Memory/Network/MicroProfiler).
+
+Part 17: Roblox Luau среда выполнения и соглашения
+- Roblox Luau = язык Luau + sandbox runtime + engine API.
+- Типизация (включая --!strict и export type) нужна для контракта, но runtime-валидацию не заменяет.
+- ServerScriptService: авторитетная логика (урон, экономика, сохранение).
+- Клиентские контейнеры (StarterPlayerScripts/StarterGui/StarterCharacterScripts): ввод, prediction, UI, VFX.
+- ReplicatedStorage: общие модули/remotes; ServerStorage: серверные шаблоны, клиенту недоступны.
+- ModuleScript require кешируется по окружению; сервер и клиент исполняют модуль отдельно.
+
+Part 18 moved to `RobloxUsages.txt` (expanded and reorganized).
+
+Part 19: Корректировки и уточнения после ревью (высокий приоритет)
+Критичные поправки
+- Нельзя напрямую сравнивать client tick() и server workspace:GetServerTimeNow() как одну временную шкалу:
+  это разные опоры и источник ложных reject.
+- Для authoritative gameplay лучше вести cooldown/таймеры полностью по серверному времени.
+- API task.synchronize/task.desynchronize, getrenv/getsenv, coroutine.close и похожие
+  engine/studio-only возможности не должны использоваться как baseline для game runtime.
+- Долгоживущие таблицы хранить по userId; если ключи Instance неизбежны, обязательны cleanup hooks
+  в PlayerRemoving/CharacterRemoving и очистка по Destroyed/AncestryChanged.
+- RemoteFunction (особенно InvokeClient с сервера) блокирующий; использовать минимально и только
+  для быстрых/нечастых операций, иначе переводить протокол в RemoteEvent response-flow.
+
+Точечные уточнения по существующим частям
+- Part 3/5: type-only ModuleScript в runtime лучше завершать return {} для safety.
+- Part 3/5: per-player state рекомендуемый паттерн states[userId] + cleanup в PlayerRemoving.
+- Part 4/9: task.* предпочитать для планирования, coroutine оставлять для low-level сценариев.
+- Part 5: для экономики/инвентаря и конкурентных обновлений DataStore использовать UpdateAsync,
+  plus retry с exponential backoff и защиту от race conditions (lock или optimistic merge).
+- Part 6/7: чётко маркировать VM-only/legacy/studio-only функции как ненадёжные для игрового runtime.
+- RunService: Heartbeat даёт deltaTime (не фиксированный шаг), таймеры строить через accumulator.
+- Part 10/11: export type не заменяет runtime-валидацию; для Roblox объектов проверять typeof + IsA.
+- Part 12/13: не смешивать client clock и server clock без explicit time sync handshake.
+- Part 14: activeTracks/VFX ссылки чистить по lifecycle модели; тяжёлые эффекты запускать с pcall и culling.
+
+Appendix A: Time synchronization (recommended)
+- Server периодически отправляет метку времени клиенту (TimeSync -> serverNow).
+- Client хранит offset = serverNow - tick().
+- При необходимости client отправляет clientTick, сервер оценивает approximateClientTime = clientTick + offset.
+- Предпочтительная альтернатива: критические cooldown/checks держать только на сервере и не отклонять
+  действия только из-за client timestamp.
+
+Appendix B: Validation helper pattern (concept)
+- Helper isNumberInRange(v, min, max): проверяет тип number и диапазон.
+- validateAttackPayload(p): проверяет table, damage range, weaponId string, targetUserId number.
+- Любой payload проходит schema validation до применения игрового эффекта/урона.
+
+Appendix C: Pooling skeleton (concept)
+- Предсоздать N объектов и хранить в пуле.
+- Spawn: взять из пула, активировать, переинициализировать transform/state.
+- Return: деактивировать, очистить transient state, вернуть обратно в пул.
+- Если пул пуст, допускается fallback-аллоцирование с последующим возвратом в пул.
+
+Appendix D: Code-review checklist (быстрый)
+- Validate payload schema/type/range.
+- Whitelist actions/weapon/projectile ids.
+- Server-authoritative damage/economy/state.
+- userId keys for long-lived tables.
+- Cleanup on PlayerRemoving/CharacterRemoving + Disconnect all connections.
+- Input throttling and send-on-change.
+- Prefer FireClient/proximity over global FireAllClients.
+- Avoid blocking RemoteFunction flows.
+- Pool VFX/projectiles/UI objects.
+- Use profiler + network stats before release.
+- Keep no file/io/system assumptions in Roblox runtime.
+- Test validate* functions and critical combat paths.
+
+Part 20: Что нового извлечено из присланных серверных скриптов (TankTurrets_and_Fire / Tank Controller)
+Практические наблюдения
+- Большие боевые серверные системы часто строятся через _G-шину между модулями
+  (_G.activeTanks, _G.tankHealthData, _G.TankMainFire), что ускоряет интеграцию, но требует
+  строгой дисциплины инициализации и нейминга.
+- Диагностический лог в Workspace через StringValue полезен для live-debug в Studio/QA,
+  когда нужно видеть события без просмотра Output.
+- Для турелей применим гибридный подход наведения: Motor6D (предпочтительно) с fallback
+  на прямой CFrame-поворот при отсутствии корректных joints.
+- В сложных танковых ригах важно резолвить части через path-lookup (например Body.Head.Barrel)
+  и иметь fallback к PrimaryPart/first BasePart.
+- Система фракций может быть вынесена в отдельный модуль (GameStats) с fallback-таблицей,
+  чтобы AI/auto-target работали даже при частичной деградации зависимостей.
+
+Надежность и риски (из кода)
+- pcall активно используется вокруг чувствительных мест (require, physics fields, damage hooks),
+  что снижает вероятность hard-crash в бою.
+- В коде встречается дублирование имени RS (повторный local RS), что повышает риск путаницы.
+- Использование tick() как универсального времени в серверных скриптах допустимо для internal-cooldowns,
+  но для единой шкалы лучше стандартизировать один источник времени внутри модуля.
+- Поиск Motor6D через глубокий GetDescendants()/workspace fallback надежен, но потенциально дорог:
+  лучше кешировать найденные связи для hot-path наведения.
+- Touched-based hit detection в projectile fallback рабочая, но для anti-cheat/стабильности под нагрузкой
+  серверный raycast обычно предсказуемее.
+
+Архитектурные паттерны, которые стоит сохранять
+- Разделение обязанностей: контроллер движения/режимов и отдельный модуль турелей/огня.
+- Явные cooldown/state таблицы per turret (data._turretState[id]) для независимого fire-control.
+- Overturn logic c mode switching (MOVE/OVERTURN), sustain-time и angular-velocity checks —
+  хороший шаблон для тяжелой техники.
+- Export API в глобал для совместимости (например _G.TankMainFire) должен сопровождаться
+  контрактом и версионностью, чтобы избежать неявных ломаний при рефакторинге.
+
+Что улучшать в будущем
+- Централизовать валидацию payload/дистанций/скоростей в helper-слое.
+- Добавить кеширование часто вычисляемых ссылок (motors, barrel parts, turret nodes).
+- Перевести критичные hit-пайплайны на серверный raycast + единый damage pipeline.
+- Вынести debug logging в переключаемый уровень (dev/staging/prod), чтобы не раздувать runtime-лог.
+
+Part 21: Production Roblox Luau — observability, scaling, networking, team workflow
+Production observability
+- DataStore не использовать как лог/метрики pipeline: это хранилище прогресса с лимитами и throttling.
+- Собирать агрегаты, а не поток сырых событий.
+- Три уровня telemetry:
+  - client metrics: FPS/input-latency/UI errors (редкая отправка, например 30-60 сек или по событию);
+  - server metrics: heartbeat time, active objects, projectile count, memory pressure, remote rate;
+  - gameplay metrics: интервальные агрегаты (shots per window, total damage), не каждое действие.
+- Для буферизации/доставки telemetry использовать MemoryStoreService или внешний backend через HttpService;
+  AnalyticsService — для high-level статистики, не для realtime deep-debug.
+
+Scaling patterns
+- Roblox масштабирует серверы горизонтально, но производительность внутри инстанса определяется архитектурой.
+- Базовые принципы: server-authoritative state, interest management, spatial partitioning/sector routing.
+- Heavy systems масштабировать через pooling, пониженную частоту обновления дальних сущностей и,
+  где уместно, через Actor/Parallel Luau.
+
+Networking limits and protocol hygiene
+- Практически безопасный диапазон частоты RemoteEvent: примерно 20-30 msg/sec на игрока;
+  устойчивость заметно падает при 60+ и особенно 100+.
+- Payload держать компактным (обычно <1KB), избегать больших таблиц/длинных строк/лишних полей.
+- Вместо отправки позиции каждый кадр — отправка input, velocity hints и периодические authoritative corrections.
+- Использовать компактные схемы: numeric IDs вместо длинных строк, округление векторов, минимальный контракт.
+
+Team standards and release process
+- Строить код вокруг систем (CombatSystem/ProjectileSystem/DamageSystem), не around single scripts.
+- Shared contracts/types в ReplicatedStorage, server systems в ServerScriptService, client controllers в StarterPlayerScripts.
+- Модульный lifecycle контракт: Init/Start/Shutdown.
+- Для релизов: feature flags, canary rollout, and rollback через параллельные версии (например V1/V2).
+- Инженерный процесс: Git + code review + reproducible project structure (например Rojo-based flow).
+
+Ключевой production фокус
+- Оптимизируется поток данных: меньше сетевых сообщений, меньше аллокаций Instance,
+  меньше дорогой физики на кадр, больше агрегации и предсказания на клиенте с серверной сверкой.
+- Следующий углублённый шаг: client prediction + server reconciliation для плавного управления техникой.
+
+Part 22: Пользовательские production-практики и игровые правила (входные требования)
+Release/process
+- Feature flags используются как основной механизм rollout/rollback без деплоя новой версии.
+- Типичный паттерн: переключение между legacy и V2 реализацией через флаг в коде.
+
+Production метрики
+- Наиболее полезны gameplay/engine агрегаты: число созданных объектов, частота RemoteEvent,
+  активная физика, нагрузка Heartbeat loop.
+- Практика: считать агрегаты за интервал (например 10 секунд), а не логировать каждое событие.
+
+Профилирование перед релизом
+- Проверять Heartbeat-пути на отсутствие Instance.new/Destroy в кадр.
+- Подтверждать, что в hot-loop остаются только вычисления/обновления состояния.
+
+Архитектура модулей
+- Предпочтение схеме "тонкий контроллер + чистые модули логики".
+- Логические модули работают с данными и минимально зависят от Players/RemoteEvents.
+
+Игровая модель (из текущих требований)
+- Урон покомпонентный: у каждой детали MaxHealth/CurrentHealth/Armor.
+- Повреждение применяется к конкретной hit-части, что поддерживает disable отдельных подсистем
+  (например гусеницы/башня).
+- Баланс аркадный с физическими ограничениями (например запрет движения при критичном наклоне).
+
+Server-authoritative правила
+- Сервер авторитетен по движению, урону, стрельбе и топливу.
+- Клиент отправляет только input-намерения (throttle/steer), без прямой передачи позиции.
+- Клиенту оставляется prediction для камеры/UI, но финальное решение принимает сервер.
+
+Античит-приоритеты
+- Критичные угрозы: подмена урона, спам RemoteEvent, попытки клиентского контроля позиции.
+- Базовое правило: клиент сообщает намерение, сервер вычисляет результат и применяет state changes.
+
+Part 23: Production standards deep-dive (from latest guidance)
+Критические практики
+- Клиентский tick/os.clock нельзя напрямую сравнивать с server GetServerTimeNow без time-sync offset.
+- Authoritative timers/cooldowns должны жить на сервере; клиентский timestamp — только hint для prediction/reconciliation.
+- Сервер никогда не принимает готовые позиции/урон/взрывы от клиента, только intent-параметры.
+- RemoteFunction (особенно InvokeClient) не использовать в hot-path: блокирует поток и повышает DoS-риск.
+
+Структура проекта и контракт
+- Рекомендуемая иерархия: ReplicatedStorage(Shared/Remotes/Prefabs), ServerScriptService(Systems/Services),
+  ServerStorage(heavy private templates), StarterPlayerScripts(client controllers), StarterGui(HUD templates).
+- Контракт модулей: Init(config), Start(), Shutdown(); минимальные side-effects при require.
+- Долгоживущие состояния индексировать по userId; cleanup обязателен в PlayerRemoving/CharacterRemoving.
+
+Сеть, валидация, cooldowns
+- OnServerEvent: первый аргумент player; action whitelist + schema validation для каждого payload.
+- Для атак: validate damage range, targetUserId, weaponId, timestamp type; потом server-side checks (distance/LOS/cooldown).
+- Cooldown pattern: cooldownRemaining[userId] обновляется на Heartbeat с dt-accumulator.
+
+Time sync handshake
+- Server периодически отправляет serverNow клиенту.
+- Client вычисляет offset = serverNow - tick().
+- Payload может включать clientTick; сервер использует как вспомогательную оценку времени, не как security source.
+
+Pooling и projectile pipeline
+- Пулы обязательны для projectiles/VFX/UI: Acquire/Release + reset transient state.
+- Надежный pipeline: validate fire -> spawn/step projectile -> server raycast/hit verify -> unified damage ->
+  proximity VFX broadcast.
+- Touched можно оставить fallback, но canonical hit truth лучше держать на server raycast.
+
+Telemetry/observability
+- DataStore не использовать как telemetry transport.
+- Собирать агрегаты по окнам (shots/hits/damage/remote-rate/heartbeat load) и отправлять батчами
+  через MemoryStore/HttpService.
+
+Release and anti-cheat operations
+- Feature flags + canary + fast rollback (V1/V2) как базовая release-стратегия.
+- Anti-cheat baseline: rate limits per action, sanity bounds, ownership checks, distance/LOS checks,
+  suspicious-event counters и progressive penalties.
+
+Code review расширенный checklist
+- Schema validation + whitelist actions.
+- Server-authoritative state transitions only.
+- userId keys for long-lived state.
+- No Instance.new/Destroy in hot loops; pooling in repeated paths.
+- Proximity routing over blanket FireAllClients.
+- RemoteFunction kept out of frequent/slow flows.
+- Cleanup all connections/tables in lifecycle hooks.
+- DataStore uses UpdateAsync + backoff + autosave strategy.
+- Profiling passed for CPU/physics/network at high-load scenarios.
+
+Roadmap внедрения
+- 1) Unified validation helpers.
+- 2) userId-key migration + cleanup hooks.
+- 3) pooling rollout.
+- 4) server-raycast-first hit pipeline.
+- 5) centralized telemetry.
+- 6) feature-flag canary + smoke/perf preflight.
+
+Part 24: Mega demo review corrections (critical learnings)
+- Client bug: RBXScriptSignal has no :Once(); Tween.Completed must use :Connect() + manual disconnect (or :Wait()).
+- Time-source safety: never hard-compare client tick()/os.clock() with workspace:GetServerTimeNow(); keep authoritative cooldown/validation on server time.
+- If time sync is needed, store per-user offset from handshake and treat clientTick as prediction hint only.
+- VFX should be pooled client-side too; avoid Instance.new per hit burst.
+- Prefer Heartbeat/task loop for network send cadence; keep RenderStepped for rendering-sensitive tasks.
+- Remove no-op allocations (example: Debris:AddItem(Instance.new("Folder"),0)).
+- Server pools should live in dedicated containers (ServerStorage/hidden pool folder), not leave inactive artifacts in Workspace.
+- For high-rate proximity checks, use squared-distance compare and evolve to sector/spatial indexing.
+- Add finite guards for numeric vectors from client payloads (NaN/Inf defense).
+- Whitelist action names before expensive logic; unknown actions handled separately (and optionally separately metered).
+- Reject counters should use a time window/sliding buckets, not unbounded lifetime increments.
